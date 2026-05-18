@@ -1,4 +1,8 @@
-import { getAccessToken } from './auth'
+import {
+  clearAuth,
+  getAccessToken,
+  isInsufficientScopeMessage,
+} from './auth'
 import type {
   PlaylistTracksPage,
   PlaylistsPage,
@@ -7,9 +11,33 @@ import type {
   SpotifyUser,
 } from './types'
 
-async function spotifyFetch<T>(path: string): Promise<T> {
+const API_ROOT = 'https://api.spotify.com/v1'
+
+const SCOPE_ERROR =
+  'Insufficient permissions. Disconnect, then Connect with Spotify again and approve all requested access.'
+
+function parseSpotifyError(status: number, body: unknown): string {
+  const err = body as {
+    error?: { message?: string; status?: number }
+    error_description?: string
+  }
+  const message =
+    err.error?.message ??
+    err.error_description ??
+    (typeof err.error === 'string' ? err.error : null) ??
+    `Spotify API error (${status})`
+
+  if (isInsufficientScopeMessage(message)) {
+    clearAuth()
+    return SCOPE_ERROR
+  }
+  return message
+}
+
+export async function spotifyFetch<T>(path: string): Promise<T> {
   const token = await getAccessToken()
-  const res = await fetch(`https://api.spotify.com/v1${path}`, {
+  const url = path.startsWith('http') ? path : `${API_ROOT}${path}`
+  const res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
   })
 
@@ -18,10 +46,49 @@ async function spotifyFetch<T>(path: string): Promise<T> {
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error(
-      (err as { error?: { message?: string } }).error?.message ??
-        `Spotify API error (${res.status})`
-    )
+    throw new Error(parseSpotifyError(res.status, err))
+  }
+
+  return res.json() as Promise<T>
+}
+
+export async function spotifyPut(path: string, body: unknown): Promise<void> {
+  const token = await getAccessToken()
+  const res = await fetch(`${API_ROOT}${path}`, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  })
+
+  if (res.status === 401) {
+    throw new Error('Session expired. Connect again.')
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(parseSpotifyError(res.status, err))
+  }
+}
+
+export async function spotifyPost<T>(path: string, body: unknown): Promise<T> {
+  const token = await getAccessToken()
+  const res = await fetch(`${API_ROOT}${path}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  })
+
+  if (res.status === 401) {
+    throw new Error('Session expired. Connect again.')
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(parseSpotifyError(res.status, err))
   }
 
   return res.json() as Promise<T>
@@ -51,10 +118,12 @@ export async function getAllPlaylists(): Promise<SpotifyPlaylist[]> {
 
 /** All tracks in a playlist (paginated). Skips removed/unavailable entries. */
 export async function getPlaylistTracks(
-  playlistId: string
+  playlistId: string,
+  market?: string
 ): Promise<SpotifyTrack[]> {
   const all: SpotifyTrack[] = []
-  let url: string | null = `/playlists/${playlistId}/tracks?limit=50`
+  const marketParam = market ? `&market=${encodeURIComponent(market)}` : ''
+  let url: string | null = `/playlists/${playlistId}/tracks?limit=50${marketParam}`
 
   while (url) {
     const path = url.startsWith('http')

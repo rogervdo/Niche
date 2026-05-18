@@ -10,6 +10,7 @@ export const IMAGE_SIZES = {
   track: 40,
   card: 300,
   detailCover: 180,
+  albumGrid: 160,
 } as const
 
 /** Smallest image with width >= target, else largest available. */

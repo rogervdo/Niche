@@ -3,14 +3,22 @@ import type { TokenResponse } from './types'
 const CLIENT_ID = import.meta.env.VITE_SPOTIFY_CLIENT_ID as string
 const REDIRECT_URI = import.meta.env.VITE_REDIRECT_URI as string
 
+/** Bump when scopes change — forces users to reconnect. */
+export const CURRENT_SCOPES_VERSION = '2'
+
 const SCOPES = [
   'playlist-read-private',
   'playlist-read-collaborative',
   'user-read-private',
+  'user-top-read',
+  'user-library-read',
+  'playlist-modify-private',
+  'playlist-modify-public',
 ].join(' ')
 
 const VERIFIER_KEY = 'niche_pkce_verifier'
 const TOKENS_KEY = 'niche_tokens'
+const SCOPES_VERSION_KEY = 'niche_scopes_version'
 
 export interface StoredTokens {
   accessToken: string
@@ -65,11 +73,25 @@ export function getStoredTokens(): StoredTokens | null {
 
 function storeTokens(tokens: StoredTokens): void {
   sessionStorage.setItem(TOKENS_KEY, JSON.stringify(tokens))
+  localStorage.setItem(SCOPES_VERSION_KEY, CURRENT_SCOPES_VERSION)
 }
 
 export function clearAuth(): void {
   sessionStorage.removeItem(TOKENS_KEY)
   sessionStorage.removeItem(VERIFIER_KEY)
+  localStorage.removeItem(SCOPES_VERSION_KEY)
+}
+
+/** True when the saved token predates the current scope list. */
+export function needsReauth(): boolean {
+  if (!getStoredTokens()) return false
+  return localStorage.getItem(SCOPES_VERSION_KEY) !== CURRENT_SCOPES_VERSION
+}
+
+export function isInsufficientScopeMessage(message: string): boolean {
+  return /insufficient.?client.?scope|insufficient.?permissions|insufficient_scope/i.test(
+    message
+  )
 }
 
 /** Redirect to Spotify — same idea as discoverify's getOAuthCodeUrl, with PKCE added. */
@@ -87,6 +109,8 @@ export async function loginWithSpotify(): Promise<void> {
     code_challenge_method: 'S256',
     code_challenge: challenge,
     state: generateRandomString(16),
+    // Required to grant newly added scopes (refresh_token alone keeps old scopes).
+    prompt: 'consent',
   })
 
   window.location.href = `https://accounts.spotify.com/authorize?${params}`
@@ -187,6 +211,10 @@ export async function getAccessToken(): Promise<string> {
   }
 
   return tokens.accessToken
+}
+
+export function getRefreshToken(): string | null {
+  return getStoredTokens()?.refreshToken ?? null
 }
 
 export function isConfigured(): boolean {

@@ -2,6 +2,7 @@ export interface SpotifyUser {
   id: string
   display_name: string | null
   email?: string
+  country?: string
   images: { url: string; height: number | null; width: number | null }[] | null
   product?: string
 }
@@ -39,6 +40,7 @@ export interface SpotifyTrack {
   id: string
   name: string
   duration_ms: number
+  preview_url: string | null
   artists: SpotifyArtist[]
   album: SpotifyAlbum
   external_urls: { spotify: string }

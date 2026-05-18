@@ -5,21 +5,26 @@ import {
   handleAuthCallback,
   isConfigured,
   loginWithSpotify,
+  needsReauth,
 } from './spotify/auth'
 import {
   classifyPlaylist,
   getAllPlaylists,
   getCurrentUser,
   getPlaylistTracks,
+  spotifyFetch,
   type PlaylistKind,
 } from './spotify/api'
+import { renderDiscoverView } from './discover/view'
+import { renderPlaylistDetail } from './playlist/detailView'
 import { IMAGE_SIZES, renderImg } from './spotify/images'
 import type { SpotifyImage } from './spotify/images'
-import type { SpotifyPlaylist, SpotifyTrack } from './spotify/types'
+import type { SpotifyPlaylist } from './spotify/types'
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 
 type Filter = 'all' | PlaylistKind
+type AppView = 'dashboard' | 'discover' | 'detail'
 
 let playlists: SpotifyPlaylist[] = []
 let userId = ''
@@ -27,17 +32,13 @@ let activeFilter: Filter = 'all'
 let searchQuery = ''
 let displayName = ''
 let userImages: SpotifyImage[] | null = null
+let userMarket = 'US'
+let currentView: AppView = 'dashboard'
 
 function escapeHtml(text: string): string {
   const el = document.createElement('div')
   el.textContent = text
   return el.innerHTML
-}
-
-function formatDuration(ms: number): string {
-  const min = Math.floor(ms / 60_000)
-  const sec = Math.floor((ms % 60_000) / 1000)
-  return `${min}:${sec.toString().padStart(2, '0')}`
 }
 
 function formatKind(kind: PlaylistKind): string {
@@ -51,7 +52,7 @@ function formatKind(kind: PlaylistKind): string {
   }
 }
 
-function renderLogin(missingConfig: boolean): void {
+function renderLogin(missingConfig: boolean, scopeUpgrade = false): void {
   app.innerHTML = `
     <div class="shell login-shell">
       <header class="hero">
@@ -62,6 +63,13 @@ function renderLogin(missingConfig: boolean): void {
           ones you follow, and collaborative lists.
         </p>
       </header>
+      ${
+        scopeUpgrade
+          ? `<div class="banner banner-warn">
+              Updated permissions are required (Discover Daily). Click Connect below and approve <strong>all</strong> access on the Spotify screen.
+            </div>`
+          : ''
+      }
       ${
         missingConfig
           ? `<div class="banner banner-warn">
@@ -149,106 +157,65 @@ function playlistCard(p: SpotifyPlaylist): string {
   `
 }
 
-function trackRow(track: SpotifyTrack, index: number): string {
-  const artists = track.artists.map((a) => a.name).join(', ')
-  const art = renderImg({
-    images: track.album.images,
-    targetWidth: IMAGE_SIZES.track,
-    width: 40,
-    height: 40,
-    alt: track.name,
-    loading: index < 8 ? 'eager' : 'lazy',
-    sizes: '40px',
-  })
-
-  return `
-    <a class="track-row" href="${track.external_urls.spotify}" target="_blank" rel="noreferrer">
-      <span class="track-index">${index + 1}</span>
-      <div class="track-art">
-        ${art || `<span class="track-art-placeholder">♪</span>`}
-      </div>
-      <div class="track-info">
-        <span class="track-name">${escapeHtml(track.name)}</span>
-        <span class="track-artists">${escapeHtml(artists)} · ${escapeHtml(track.album.name)}</span>
-      </div>
-      <span class="track-duration">${formatDuration(track.duration_ms)}</span>
-    </a>
-  `
-}
-
-function renderPlaylistDetail(playlist: SpotifyPlaylist, tracks: SpotifyTrack[]): void {
-  const kind = classifyPlaylist(playlist, userId)
-  const cover = renderImg({
-    images: playlist.images,
-    targetWidth: IMAGE_SIZES.detailCover,
-    width: 180,
-    height: 180,
-    alt: playlist.name,
-    loading: 'eager',
-    fetchPriority: 'high',
-    sizes: '(max-width: 600px) 140px, 180px',
-  })
-  const owner = playlist.owner?.display_name ?? playlist.owner?.id ?? 'Unknown'
-
-  app.innerHTML = `
-    <div class="shell detail-shell">
-      <button type="button" class="btn-back" id="back-btn">← Back to playlists</button>
-
-      <header class="detail-header">
-        <div class="detail-cover">
-          ${cover || `<span class="card-placeholder">♪</span>`}
-        </div>
-        <div class="detail-meta">
-          <span class="badge badge-${kind}">${formatKind(kind)}</span>
-          <h1>${escapeHtml(playlist.name)}</h1>
-          <p class="detail-sub">
-            ${escapeHtml(owner)} · ${tracks.length} track${tracks.length === 1 ? '' : 's'}
-          </p>
-          ${
-            playlist.description
-              ? `<p class="detail-desc">${escapeHtml(playlist.description)}</p>`
-              : ''
-          }
-          <a
-            class="btn-open-spotify"
-            href="${playlist.external_urls.spotify}"
-            target="_blank"
-            rel="noreferrer"
-          >Open in Spotify</a>
-        </div>
-      </header>
-
-      <div class="track-list">
-        ${
-          tracks.length
-            ? tracks.map((t, i) => trackRow(t, i)).join('')
-            : '<p class="empty">No tracks in this playlist.</p>'
-        }
-      </div>
-    </div>
-  `
-
-  document.getElementById('back-btn')!.addEventListener('click', () => {
-    renderDashboard()
-  })
+function openDiscover(): void {
+  currentView = 'discover'
+  void renderDiscoverView(
+    app,
+    userId,
+    userMarket,
+    () => {
+      currentView = 'dashboard'
+      renderDashboard()
+    },
+    (playlistId) => {
+      currentView = 'detail'
+      openPlaylist(playlistId)
+    }
+  )
 }
 
 async function openPlaylist(playlistId: string): Promise<void> {
-  const playlist = playlists.find((p) => p.id === playlistId)
-  if (!playlist) return
+  let playlist = playlists.find((p) => p.id === playlistId)
+  if (!playlist) {
+    showLoading('Loading playlist…')
+    try {
+      playlist = await spotifyFetch<SpotifyPlaylist>(`/playlists/${playlistId}`)
+      if (!playlists.some((p) => p.id === playlist!.id)) {
+        playlists = [playlist, ...playlists]
+      }
+    } catch (e) {
+      if (currentView === 'discover') openDiscover()
+      else renderDashboard()
+      showError(e)
+      return
+    }
+  }
 
+  currentView = 'detail'
   showLoading(`Loading “${playlist.name}”…`)
 
   try {
-    const tracks = await getPlaylistTracks(playlistId)
-    renderPlaylistDetail(playlist, tracks)
+    const tracks = await getPlaylistTracks(playlistId, userMarket)
+    renderPlaylistDetail(
+      app,
+      playlist,
+      tracks,
+      classifyPlaylist(playlist, userId),
+      userMarket,
+      () => {
+        currentView = 'dashboard'
+        renderDashboard()
+      }
+    )
   } catch (e) {
+    currentView = 'dashboard'
     renderDashboard()
     showError(e)
   }
 }
 
 function renderDashboard(): void {
+  currentView = 'dashboard'
   const visible = filteredPlaylists()
 
   app.innerHTML = `
@@ -276,6 +243,11 @@ function renderDashboard(): void {
           <button class="btn-ghost" id="logout-btn" type="button">Disconnect</button>
         </div>
       </header>
+
+      <div class="nav-tabs">
+        <button type="button" class="nav-tab active" disabled>Playlists</button>
+        <button type="button" class="nav-tab" id="discover-tab">Discover Daily</button>
+      </div>
 
       ${statsHtml(playlists)}
 
@@ -312,6 +284,10 @@ function renderDashboard(): void {
       </div>
     </div>
   `
+
+  document.getElementById('discover-tab')!.addEventListener('click', () => {
+    openDiscover()
+  })
 
   document.getElementById('logout-btn')!.addEventListener('click', () => {
     clearAuth()
@@ -385,6 +361,12 @@ async function boot(): Promise<void> {
     return
   }
 
+  if (needsReauth()) {
+    clearAuth()
+    renderLogin(false, true)
+    return
+  }
+
   showLoading('Loading your playlists…')
 
   try {
@@ -393,6 +375,7 @@ async function boot(): Promise<void> {
     playlists = await getAllPlaylists()
     displayName = user.display_name ?? user.id
     userImages = user.images
+    userMarket = user.country ?? 'US'
     renderDashboard()
   } catch (e) {
     clearAuth()
