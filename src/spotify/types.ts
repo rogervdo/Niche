@@ -28,6 +28,7 @@ export interface PlaylistsPage {
 }
 
 export interface SpotifyArtist {
+  id?: string
   name: string
 }
 

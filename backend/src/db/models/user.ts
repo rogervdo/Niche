@@ -39,6 +39,10 @@ const userSchema = new Schema<UserDocument>(
         type: [String],
         default: DEFAULT_OPTIONS.anchorArtistIds,
       },
+      excludePlaylistIds: {
+        type: [String],
+        default: DEFAULT_OPTIONS.excludePlaylistIds,
+      },
       genres: { type: [String], default: DEFAULT_OPTIONS.genres },
       artistPopularity: {
         ...rangeSchema,

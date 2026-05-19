@@ -3,6 +3,10 @@
  * optionally branching from anchor artist IDs.
  */
 import { parseAnchorArtistIds } from './anchors'
+import {
+  fetchArtistIdsFromPlaylists,
+  parseExcludePlaylistIds,
+} from './playlistExclude'
 import type { PlaylistOptions } from './options'
 import {
   expandGenreTargets,
@@ -423,7 +427,12 @@ export async function pickPlaylistFromNicheArtists(
     ? genreSearchTerms(options.genres)
     : genreSearchTermsFromTargets(targetGenres)
 
-  const excludeIds = new Set(anchorIds)
+  const excludePlaylistIds = parseExcludePlaylistIds(options.excludePlaylistIds)
+  const playlistExcluded =
+    excludePlaylistIds.length > 0
+      ? await fetchArtistIdsFromPlaylists(excludePlaylistIds, market)
+      : new Set<string>()
+  const excludeIds = new Set([...anchorIds, ...playlistExcluded])
 
   const candidateIds = await gatherCandidateArtistIds(
     anchorIds,

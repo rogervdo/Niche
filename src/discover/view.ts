@@ -16,6 +16,7 @@ import {
   listenerCapToSliderIndex,
   LISTENER_CAP_STEPS,
   loadOptions,
+  parseFollowerCapInput,
   saveOptions,
   sliderIndexToListenerCap,
   type PlaylistOptions,
@@ -71,6 +72,9 @@ async function loadBackendState(userId: string): Promise<void> {
     options = {
       ...subscribedUser.playlistOptions,
       anchorArtistIds: [...(subscribedUser.playlistOptions.anchorArtistIds ?? [])],
+      excludePlaylistIds: [
+        ...(subscribedUser.playlistOptions.excludePlaylistIds ?? []),
+      ],
       genres: [...(subscribedUser.playlistOptions.genres ?? [])],
     }
   } else {
@@ -98,8 +102,11 @@ export async function renderDiscoverView(
 
   const [popMin, popMax] = options.artistPopularity
   const maxListenersIdx = listenerCapToSliderIndex(options.maxListeners)
+  const maxFollowersInputValue =
+    options.maxListeners === 0 ? '' : String(options.maxListeners)
   const genresValue = options.genres.join(', ')
   const anchorsValue = options.anchorArtistIds.join('\n')
+  const excludePlaylistsValue = options.excludePlaylistIds.join('\n')
 
   root.innerHTML = `
     <div class="shell discover-shell">
@@ -131,6 +138,15 @@ export async function renderDiscoverView(
       </section>
 
       <section class="discover-panel">
+        <h2>Exclude playlists <span class="hint">(optional, max 10)</span></h2>
+        <p class="panel-desc">
+          Spotify playlist links or IDs, one per line. Every artist on these playlists is
+          <strong>blocked</strong> from Niche Daily (e.g. your main library, past Niche Daily runs, or a “already know” list).
+        </p>
+        <textarea class="anchor-input" id="exclude-playlists-input" rows="3" placeholder="https://open.spotify.com/playlist/...">${excludePlaylistsValue.replace(/</g, '&lt;')}</textarea>
+      </section>
+
+      <section class="discover-panel">
         <h2>Artist popularity</h2>
         <p class="panel-desc">Spotify score 0–100. Niche sweet spot is usually 20–65.</p>
         <div class="range-group">
@@ -146,8 +162,8 @@ export async function renderDiscoverView(
       </section>
 
       <section class="discover-panel">
-        <h2>Max listeners</h2>
-        <p class="panel-desc">Caps artist size by Spotify follower count (proxy — the API does not expose monthly listeners).</p>
+        <h2>Max followers</h2>
+        <p class="panel-desc">Caps artist size by Spotify follower count (the API does not expose monthly listeners).</p>
         <div class="range-group">
           <div class="range-header">
             <span>Follower ceiling</span>
@@ -160,6 +176,20 @@ export async function renderDiscoverView(
             value="${maxListenersIdx}"
             id="max-listeners"
           />
+          <div class="follower-cap-input-row">
+            <label for="max-followers-input">Exact cap</label>
+            <input
+              type="text"
+              inputmode="numeric"
+              id="max-followers-input"
+              class="follower-cap-input"
+              value="${maxFollowersInputValue}"
+              placeholder="No limit"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <span class="follower-cap-hint">e.g. 35000 or 35k — empty = no limit</span>
+          </div>
         </div>
       </section>
 
@@ -173,6 +203,18 @@ export async function renderDiscoverView(
 
   document.getElementById('discover-back')!.addEventListener('click', onBack)
 
+  const applyFollowerCap = (cap: number): void => {
+    options.maxListeners = cap
+    const slider = document.getElementById('max-listeners') as HTMLInputElement | null
+    const input = document.getElementById('max-followers-input') as HTMLInputElement | null
+    const label = document.getElementById('max-listeners-label')
+    if (slider) slider.value = String(listenerCapToSliderIndex(cap))
+    if (input && document.activeElement !== input) {
+      input.value = cap === 0 ? '' : String(cap)
+    }
+    if (label) label.textContent = formatListenerCap(cap)
+  }
+
   const syncOptionsFromDom = (): void => {
     const rawGenres = (document.getElementById('genre-input') as HTMLInputElement).value
     options.genres = rawGenres
@@ -182,6 +224,14 @@ export async function renderDiscoverView(
 
     const rawAnchors = (document.getElementById('anchor-input') as HTMLTextAreaElement).value
     options.anchorArtistIds = rawAnchors
+      .split(/[\n,]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+
+    const rawExcludePlaylists = (
+      document.getElementById('exclude-playlists-input') as HTMLTextAreaElement
+    ).value
+    options.excludePlaylistIds = rawExcludePlaylists
       .split(/[\n,]+/)
       .map((s) => s.trim())
       .filter(Boolean)
@@ -200,20 +250,26 @@ export async function renderDiscoverView(
     const listenersIdx = Number(
       (document.getElementById('max-listeners') as HTMLInputElement).value
     )
-    options.maxListeners = sliderIndexToListenerCap(listenersIdx)
-    const listenersLabel = document.getElementById('max-listeners-label')
-    if (listenersLabel) {
-      listenersLabel.textContent = formatListenerCap(options.maxListeners)
-    }
+    applyFollowerCap(sliderIndexToListenerCap(listenersIdx))
 
+    void persistOptions(userId)
+  }
+
+  const syncFollowerCapFromInput = (): void => {
+    const input = document.getElementById('max-followers-input') as HTMLInputElement
+    applyFollowerCap(parseFollowerCapInput(input.value))
     void persistOptions(userId)
   }
 
   document.getElementById('genre-input')!.addEventListener('change', syncOptionsFromDom)
   document.getElementById('anchor-input')!.addEventListener('change', syncOptionsFromDom)
+  document
+    .getElementById('exclude-playlists-input')!
+    .addEventListener('change', syncOptionsFromDom)
   document.getElementById('artist-pop-min')!.addEventListener('input', syncOptionsFromDom)
   document.getElementById('artist-pop-max')!.addEventListener('input', syncOptionsFromDom)
   document.getElementById('max-listeners')!.addEventListener('input', syncOptionsFromDom)
+  document.getElementById('max-followers-input')!.addEventListener('change', syncFollowerCapFromInput)
 
   document.getElementById('reset-options')!.addEventListener('click', async () => {
     if (subscribedUser) {

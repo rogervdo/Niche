@@ -3,6 +3,10 @@
  * optionally branching from anchor artist IDs (not your listening history).
  */
 import { parseAnchorArtistIds } from '../discover/anchors.js'
+import {
+  fetchArtistIdsFromPlaylists,
+  parseExcludePlaylistIds,
+} from '../discover/playlistExclude.js'
 import type { PlaylistOptions } from '../discover/options.js'
 import {
   expandGenreTargets,
@@ -451,7 +455,16 @@ export async function pickPlaylistFromNicheArtists(
     ? genreSearchTerms(options.genres)
     : genreSearchTermsFromTargets(targetGenres)
 
-  const excludeIds = new Set(anchorIds)
+  const excludePlaylistIds = parseExcludePlaylistIds(options.excludePlaylistIds)
+  const playlistExcluded =
+    excludePlaylistIds.length > 0
+      ? await fetchArtistIdsFromPlaylists(
+          excludePlaylistIds,
+          accessToken,
+          market
+        )
+      : new Set<string>()
+  const excludeIds = new Set([...anchorIds, ...playlistExcluded])
 
   const candidateIds = await gatherCandidateArtistIds(
     anchorIds,

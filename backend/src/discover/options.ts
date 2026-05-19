@@ -6,6 +6,8 @@ export interface PlaylistOptions {
   seeds?: SeedCode[]
   /** Optional anchor artists (Spotify ID or URL). We find related artists; anchors are not added to the playlist. */
   anchorArtistIds: string[]
+  /** Playlist IDs or Spotify URLs — artists on these playlists are never added. */
+  excludePlaylistIds: string[]
   /** Target genres; required unless anchor artists supply enough genre signal. */
   genres: string[]
   artistPopularity: [number, number]
@@ -21,6 +23,7 @@ export interface PlaylistOptions {
 
 export const DEFAULT_OPTIONS: PlaylistOptions = {
   anchorArtistIds: [],
+  excludePlaylistIds: [],
   genres: [],
   artistPopularity: [30, 60],
   maxListeners: 500_000,
@@ -39,6 +42,7 @@ export function mergeOptions(
     return {
       ...DEFAULT_OPTIONS,
       anchorArtistIds: [...DEFAULT_OPTIONS.anchorArtistIds],
+      excludePlaylistIds: [...DEFAULT_OPTIONS.excludePlaylistIds],
       genres: [...DEFAULT_OPTIONS.genres],
     }
   }
@@ -48,22 +52,45 @@ export function mergeOptions(
     anchorArtistIds: options.anchorArtistIds?.length
       ? [...options.anchorArtistIds]
       : [...DEFAULT_OPTIONS.anchorArtistIds],
+    excludePlaylistIds: options.excludePlaylistIds?.length
+      ? [...options.excludePlaylistIds]
+      : [...DEFAULT_OPTIONS.excludePlaylistIds],
     genres: options.genres?.length
       ? [...options.genres]
       : [...DEFAULT_OPTIONS.genres],
     artistPopularity: options.artistPopularity ?? DEFAULT_OPTIONS.artistPopularity,
-    maxListeners: options.maxListeners ?? DEFAULT_OPTIONS.maxListeners,
+    maxListeners: clampFollowerCap(
+      options.maxListeners ?? DEFAULT_OPTIONS.maxListeners
+    ),
   }
 }
 
-/** Slider steps for maxListeners (followers). Index 0 = no cap. */
-export const LISTENER_CAP_STEPS = [
-  0, 10_000, 25_000, 50_000, 100_000, 250_000, 500_000, 750_000, 1_000_000,
-  2_000_000, 5_000_000,
-] as const
+export function buildListenerCapSteps(): number[] {
+  const steps: number[] = [0]
+  for (let n = 1_000; n <= 10_000; n += 1_000) steps.push(n)
+  for (let n = 15_000; n <= 50_000; n += 5_000) steps.push(n)
+  for (let n = 60_000; n <= 100_000; n += 10_000) steps.push(n)
+  for (let n = 125_000; n <= 250_000; n += 25_000) steps.push(n)
+  for (let n = 300_000; n <= 1_000_000; n += 50_000) steps.push(n)
+  for (const n of [
+    1_250_000, 1_500_000, 2_000_000, 3_000_000, 5_000_000, 10_000_000,
+  ]) {
+    steps.push(n)
+  }
+  return steps
+}
+
+export const LISTENER_CAP_STEPS = buildListenerCapSteps()
+
+export const MAX_FOLLOWER_CAP = 10_000_000
+
+export function clampFollowerCap(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 0
+  return Math.min(Math.max(Math.round(value), 1_000), MAX_FOLLOWER_CAP)
+}
 
 export function listenerCapToSliderIndex(cap: number): number {
-  const idx = LISTENER_CAP_STEPS.indexOf(cap as (typeof LISTENER_CAP_STEPS)[number])
+  const idx = LISTENER_CAP_STEPS.indexOf(cap)
   if (idx >= 0) return idx
   let nearest = 0
   let best = Infinity

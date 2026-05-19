@@ -4,6 +4,8 @@ export type SeedCode = 'AA' | 'MA' | 'SA' | 'AT' | 'MT' | 'ST'
 export interface PlaylistOptions {
   seeds?: SeedCode[]
   anchorArtistIds: string[]
+  /** Playlist IDs or Spotify URLs — artists on these playlists are never added. */
+  excludePlaylistIds: string[]
   genres: string[]
   artistPopularity: [number, number]
   /** Max Spotify followers (proxy for monthly listeners). 0 = no cap. */
@@ -18,6 +20,7 @@ export interface PlaylistOptions {
 
 export const DEFAULT_OPTIONS: PlaylistOptions = {
   anchorArtistIds: [],
+  excludePlaylistIds: [],
   genres: [],
   artistPopularity: [30, 60],
   maxListeners: 500_000,
@@ -29,13 +32,45 @@ export const DEFAULT_OPTIONS: PlaylistOptions = {
   valence: [10, 90],
 }
 
-export const LISTENER_CAP_STEPS = [
-  0, 10_000, 25_000, 50_000, 100_000, 250_000, 500_000, 750_000, 1_000_000,
-  2_000_000, 5_000_000,
-] as const
+/** Follower-cap slider steps (index 0 = no cap). Dense below 250K for niche tuning. */
+export function buildListenerCapSteps(): number[] {
+  const steps: number[] = [0]
+  for (let n = 1_000; n <= 10_000; n += 1_000) steps.push(n)
+  for (let n = 15_000; n <= 50_000; n += 5_000) steps.push(n)
+  for (let n = 60_000; n <= 100_000; n += 10_000) steps.push(n)
+  for (let n = 125_000; n <= 250_000; n += 25_000) steps.push(n)
+  for (let n = 300_000; n <= 1_000_000; n += 50_000) steps.push(n)
+  for (const n of [
+    1_250_000, 1_500_000, 2_000_000, 3_000_000, 5_000_000, 10_000_000,
+  ]) {
+    steps.push(n)
+  }
+  return steps
+}
+
+export const LISTENER_CAP_STEPS = buildListenerCapSteps()
+
+export const MAX_FOLLOWER_CAP = 10_000_000
+
+/** 0 = no cap. Otherwise clamped to [1_000, MAX_FOLLOWER_CAP]. */
+export function clampFollowerCap(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 0
+  return Math.min(Math.max(Math.round(value), 1_000), MAX_FOLLOWER_CAP)
+}
+
+export function parseFollowerCapInput(raw: string): number {
+  const trimmed = raw.trim().toLowerCase().replace(/,/g, '')
+  if (!trimmed) return 0
+  const k = trimmed.match(/^([\d.]+)k$/)
+  if (k) return clampFollowerCap(Number(k[1]) * 1_000)
+  const m = trimmed.match(/^([\d.]+)m$/)
+  if (m) return clampFollowerCap(Number(m[1]) * 1_000_000)
+  const n = Number(trimmed)
+  return Number.isFinite(n) ? clampFollowerCap(n) : 0
+}
 
 export function listenerCapToSliderIndex(cap: number): number {
-  const idx = LISTENER_CAP_STEPS.indexOf(cap as (typeof LISTENER_CAP_STEPS)[number])
+  const idx = LISTENER_CAP_STEPS.indexOf(cap)
   if (idx >= 0) return idx
   let nearest = 0
   let best = Infinity
@@ -74,6 +109,7 @@ export function loadOptions(): PlaylistOptions {
     return {
       ...DEFAULT_OPTIONS,
       anchorArtistIds: [...DEFAULT_OPTIONS.anchorArtistIds],
+      excludePlaylistIds: [...DEFAULT_OPTIONS.excludePlaylistIds],
       genres: [...DEFAULT_OPTIONS.genres],
     }
   }
@@ -85,6 +121,9 @@ export function loadOptions(): PlaylistOptions {
       anchorArtistIds: parsed.anchorArtistIds?.length
         ? [...parsed.anchorArtistIds]
         : [...DEFAULT_OPTIONS.anchorArtistIds],
+      excludePlaylistIds: parsed.excludePlaylistIds?.length
+        ? [...parsed.excludePlaylistIds]
+        : [...DEFAULT_OPTIONS.excludePlaylistIds],
       genres: parsed.genres?.length ? [...parsed.genres] : [...DEFAULT_OPTIONS.genres],
       artistPopularity: parsed.artistPopularity ?? DEFAULT_OPTIONS.artistPopularity,
       maxListeners: parsed.maxListeners ?? DEFAULT_OPTIONS.maxListeners,
@@ -93,6 +132,7 @@ export function loadOptions(): PlaylistOptions {
     return {
       ...DEFAULT_OPTIONS,
       anchorArtistIds: [...DEFAULT_OPTIONS.anchorArtistIds],
+      excludePlaylistIds: [...DEFAULT_OPTIONS.excludePlaylistIds],
       genres: [...DEFAULT_OPTIONS.genres],
     }
   }

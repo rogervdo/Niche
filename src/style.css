@@ -582,6 +582,37 @@ code {
   accent-color: var(--accent);
 }
 
+.follower-cap-input-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin-top: 0.35rem;
+  font-size: 0.85rem;
+}
+
+.follower-cap-input-row label {
+  color: var(--muted);
+}
+
+.follower-cap-input {
+  width: 6.5rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.9rem;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.follower-cap-hint {
+  flex: 1 1 12rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
 .discover-actions {
   margin-top: 0.5rem;
 }
