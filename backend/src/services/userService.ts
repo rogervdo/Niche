@@ -7,12 +7,36 @@ import {
   type UserDocument,
 } from '../db/models/user.js'
 import { DEFAULT_OPTIONS, mergeOptions, type PlaylistOptions } from '../discover/options.js'
+import {
+  fetchKnownArtistIds,
+  KNOWN_ARTISTS_CACHE_TTL_MS,
+} from '../services/knownArtists.js'
 import { generateDiscoverPlaylist } from '../services/discover.js'
 import {
   isInvalidGrant,
   refreshAccessToken,
   validateUser,
 } from '../services/spotify.js'
+
+async function getKnownArtistIds(
+  user: UserDocument,
+  accessToken: string
+): Promise<Set<string>> {
+  const updatedAt = user.knownArtistsUpdatedAt
+  const cacheFresh =
+    updatedAt &&
+    Date.now() - updatedAt.getTime() < KNOWN_ARTISTS_CACHE_TTL_MS &&
+    user.knownArtistIds.length > 0
+
+  if (cacheFresh) {
+    return new Set(user.knownArtistIds)
+  }
+
+  const ids = await fetchKnownArtistIds(accessToken)
+  user.knownArtistIds = [...ids]
+  user.knownArtistsUpdatedAt = new Date()
+  return ids
+}
 
 export async function generateForUser(
   user: UserDocument,
@@ -26,12 +50,15 @@ export async function generateForUser(
     user.refreshToken = newRefresh
   }
 
+  const knownArtistIds = await getKnownArtistIds(user, accessToken)
+
   const result = await generateDiscoverPlaylist(
     user.userId,
     mergeOptions(user.playlistOptions),
     accessToken,
     market,
-    user.playlistId
+    user.playlistId,
+    knownArtistIds
   )
 
   user.playlistId = result.playlistId

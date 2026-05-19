@@ -102,14 +102,18 @@ export async function generatePlaylist(
   playlistId: string
   trackCount: number
   playlistUrl: string
-  mode: 'recommendations' | 'related-artists'
+  mode: 'niche-artists'
+  artistCount?: number
+  targetGenres?: string[]
 }> {
   const data = await apiFetch<{
     result: {
       playlistId: string
       trackCount: number
       playlistUrl: string
-      mode: 'recommendations' | 'related-artists'
+      mode: 'niche-artists'
+      artistCount?: number
+      targetGenres?: string[]
     }
   }>('/api/discover/generate', {
     method: 'POST',

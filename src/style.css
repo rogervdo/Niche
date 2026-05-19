@@ -498,6 +498,23 @@ code {
   color: var(--muted);
 }
 
+.genre-input,
+.anchor-input {
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.95rem;
+  font-family: inherit;
+}
+
+.anchor-input {
+  resize: vertical;
+  min-height: 5rem;
+}
+
 .seed-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));

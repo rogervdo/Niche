@@ -12,6 +12,8 @@ export interface IUser {
   playlistId: string | null
   lastUpdated: Date | null
   playlistOptions: PlaylistOptions
+  knownArtistIds: string[]
+  knownArtistsUpdatedAt: Date | null
 }
 
 export interface UserDocument extends IUser, Document {}
@@ -30,8 +32,19 @@ const userSchema = new Schema<UserDocument>(
     refreshToken: { type: String, required: true, unique: true },
     playlistId: { type: String, default: null },
     lastUpdated: { type: Date, default: null },
+    knownArtistIds: { type: [String], default: [] },
+    knownArtistsUpdatedAt: { type: Date, default: null },
     playlistOptions: {
-      seeds: { type: [String], default: DEFAULT_OPTIONS.seeds },
+      anchorArtistIds: {
+        type: [String],
+        default: DEFAULT_OPTIONS.anchorArtistIds,
+      },
+      genres: { type: [String], default: DEFAULT_OPTIONS.genres },
+      artistPopularity: {
+        ...rangeSchema,
+        default: DEFAULT_OPTIONS.artistPopularity,
+      },
+      maxListeners: { type: Number, default: DEFAULT_OPTIONS.maxListeners },
       acousticness: { ...rangeSchema, default: DEFAULT_OPTIONS.acousticness },
       danceability: { ...rangeSchema, default: DEFAULT_OPTIONS.danceability },
       energy: { ...rangeSchema, default: DEFAULT_OPTIONS.energy },

@@ -1,5 +1,5 @@
 import cors from 'cors'
-import express from 'express'
+import express, { Router } from 'express'
 import { config } from './config.js'
 import { connectDb } from './db/client.js'
 import { startDailyPlaylistJob } from './jobs/dailyPlaylist.js'
@@ -8,6 +8,24 @@ import { authRouter } from './routes/auth.js'
 import { adminRouter, discoverRouter } from './routes/discover.js'
 import { previewRouter } from './routes/preview.js'
 import { usersRouter } from './routes/users.js'
+
+const isVercel = Boolean(process.env.VERCEL)
+
+function createApiRouter(): Router {
+  const api = Router()
+
+  api.get('/health', (_req, res) => {
+    res.json({ ok: true, now: new Date().toISOString() })
+  })
+
+  api.use('/preview', previewRouter)
+  api.use('/auth', authRouter)
+  api.use('/users', ensureDb, usersRouter)
+  api.use('/discover', ensureDb, discoverRouter)
+  api.use('/admin', ensureDb, adminRouter)
+
+  return api
+}
 
 const app = express()
 
@@ -19,17 +37,9 @@ app.use(
 )
 app.use(express.json())
 
-app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, now: new Date().toISOString() })
-})
-
-app.use('/api/preview', previewRouter)
-app.use('/api/auth', authRouter)
-app.use('/api/users', ensureDb, usersRouter)
-app.use('/api/discover', ensureDb, discoverRouter)
-app.use('/api/admin', ensureDb, adminRouter)
-
-const isVercel = Boolean(process.env.VERCEL)
+// Vercel Services routePrefix `/api` strips that prefix before the request hits Express.
+// Local dev: Vite proxies `/api` → backend with the full path, so mount at `/api`.
+app.use(isVercel ? '/' : '/api', createApiRouter())
 
 if (!isVercel) {
   async function main(): Promise<void> {

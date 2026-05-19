@@ -5,6 +5,7 @@ import { spotifyFetch } from '../services/spotify.js'
 import type { PlaylistOptions } from '../discover/options.js'
 
 const PLAYLIST_SIZE = 30
+const MAX_CANDIDATES = 200
 
 export interface TrackCandidate {
   id: string
@@ -98,7 +99,7 @@ async function gatherCandidates(
   const [popMin, popMax] = options.popularity
 
   for (const artistId of uniqueArtists) {
-    if (candidates.length >= 100) break
+    if (candidates.length >= MAX_CANDIDATES) break
     try {
       const tracks = shuffle(
         await getArtistTopTracks(artistId, market, accessToken)
@@ -118,29 +119,13 @@ async function gatherCandidates(
   return candidates
 }
 
-async function getLiked(
-  trackIds: string[],
-  accessToken: string
-): Promise<boolean[]> {
-  if (!trackIds.length) return []
-  const chunks: boolean[] = []
-  for (let i = 0; i < trackIds.length; i += 50) {
-    const slice = trackIds.slice(i, i + 50)
-    const part = await spotifyFetch<boolean[]>(
-      `/me/tracks/contains?ids=${slice.join(',')}`,
-      accessToken
-    )
-    chunks.push(...part)
-  }
-  return chunks
-}
-
 export async function pickTracksViaRelatedArtists(
   seeds: { artists: string[]; tracks: string[] },
   options: PlaylistOptions,
-  tracksInPlaylist: Set<string>,
+  knownTrackIds: Set<string>,
   market: string,
-  accessToken: string
+  accessToken: string,
+  alreadySelected: Set<string> = new Set()
 ): Promise<string[]> {
   const seedArtists = await expandSeedsToArtists(seeds, accessToken)
   if (!seedArtists.length) return []
@@ -153,33 +138,16 @@ export async function pickTracksViaRelatedArtists(
   )
   if (!candidates.length) return []
 
-  const trackIds = candidates.map((t) => t.id)
-  const liked = await getLiked(trackIds, accessToken)
+  const remaining = PLAYLIST_SIZE - alreadySelected.size
+  if (remaining <= 0) return []
 
-  const playlistUris = new Set<string>()
-  const likedUris = new Set<string>()
-  const inPlaylistUris = new Set<string>()
-
-  for (let i = 0; i < candidates.length; i += 1) {
-    const { uri, id } = candidates[i]!
-    if (tracksInPlaylist.has(id)) inPlaylistUris.add(uri)
-    if (!liked[i]) {
-      playlistUris.add(uri)
-    } else {
-      likedUris.add(uri)
-    }
-    if (playlistUris.size >= PLAYLIST_SIZE) break
+  const playlistUris: string[] = []
+  for (const { uri, id } of candidates) {
+    if (knownTrackIds.has(id)) continue
+    if (alreadySelected.has(uri)) continue
+    playlistUris.push(uri)
+    if (playlistUris.length >= remaining) break
   }
 
-  for (const uri of inPlaylistUris) {
-    if (playlistUris.size >= PLAYLIST_SIZE) break
-    if (!likedUris.has(uri)) playlistUris.add(uri)
-  }
-
-  for (const uri of likedUris) {
-    if (playlistUris.size >= PLAYLIST_SIZE) break
-    playlistUris.add(uri)
-  }
-
-  return Array.from(playlistUris)
+  return playlistUris
 }
