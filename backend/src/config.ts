@@ -19,15 +19,30 @@ function requireEnv(name: string, ...fallbackNames: string[]): string {
   return value
 }
 
+let spotifyConfig: {
+  clientId: string
+  clientSecret: string
+  redirectUri: string
+} | null = null
+
+function getSpotifyConfig() {
+  if (!spotifyConfig) {
+    spotifyConfig = {
+      clientId: requireEnv('SPOTIFY_CLIENT_ID', 'VITE_SPOTIFY_CLIENT_ID'),
+      clientSecret: requireEnv('SPOTIFY_CLIENT_SECRET'),
+      redirectUri:
+        firstEnv('SPOTIFY_REDIRECT_URI', 'VITE_REDIRECT_URI') ??
+        'http://127.0.0.1:5173/callback',
+    }
+  }
+  return spotifyConfig
+}
+
 export const config = {
   port: Number(process.env.PORT ?? 3001),
   databaseUrl: process.env.DATABASE_URL ?? 'mongodb://localhost:27017/niche',
-  spotify: {
-    clientId: requireEnv('SPOTIFY_CLIENT_ID', 'VITE_SPOTIFY_CLIENT_ID'),
-    clientSecret: requireEnv('SPOTIFY_CLIENT_SECRET'),
-    redirectUri:
-      firstEnv('SPOTIFY_REDIRECT_URI', 'VITE_REDIRECT_URI') ??
-      'http://127.0.0.1:5173/callback',
+  get spotify() {
+    return getSpotifyConfig()
   },
   cronSchedule: process.env.CRON_SCHEDULE ?? '0 6 * * *',
   adminClientSecret: process.env.ADMIN_CLIENT_SECRET ?? '',

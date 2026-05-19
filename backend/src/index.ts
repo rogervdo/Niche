@@ -3,6 +3,7 @@ import express from 'express'
 import { config } from './config.js'
 import { connectDb } from './db/client.js'
 import { startDailyPlaylistJob } from './jobs/dailyPlaylist.js'
+import { ensureDb } from './middleware/ensureDb.js'
 import { authRouter } from './routes/auth.js'
 import { adminRouter, discoverRouter } from './routes/discover.js'
 import { previewRouter } from './routes/preview.js'
@@ -22,22 +23,28 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, now: new Date().toISOString() })
 })
 
-app.use('/api/auth', authRouter)
-app.use('/api/users', usersRouter)
-app.use('/api/discover', discoverRouter)
 app.use('/api/preview', previewRouter)
-app.use('/api/admin', adminRouter)
+app.use('/api/auth', authRouter)
+app.use('/api/users', ensureDb, usersRouter)
+app.use('/api/discover', ensureDb, discoverRouter)
+app.use('/api/admin', ensureDb, adminRouter)
 
-async function main(): Promise<void> {
-  await connectDb()
-  startDailyPlaylistJob()
+const isVercel = Boolean(process.env.VERCEL)
 
-  app.listen(config.port, '127.0.0.1', () => {
-    console.log(`Niche API listening on http://127.0.0.1:${config.port}`)
+if (!isVercel) {
+  async function main(): Promise<void> {
+    await connectDb()
+    startDailyPlaylistJob()
+    const host = process.env.HOST ?? '127.0.0.1'
+    app.listen(config.port, host, () => {
+      console.log(`Niche API listening on http://${host}:${config.port}`)
+    })
+  }
+
+  main().catch((err) => {
+    console.error('Failed to start server:', err)
+    process.exit(1)
   })
 }
 
-main().catch((err) => {
-  console.error('Failed to start server:', err)
-  process.exit(1)
-})
+export default app

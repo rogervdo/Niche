@@ -9,5 +9,11 @@
       "routePrefix": "/api",
       "framework": "express"
     }
-  }
+  },
+  "rewrites": [
+    {
+      "source": "/spotify-embed/:path*",
+      "destination": "https://open.spotify.com/embed/:path*"
+    }
+  ]
 }
