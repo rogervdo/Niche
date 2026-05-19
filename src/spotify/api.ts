@@ -4,8 +4,10 @@ import {
   isInsufficientScopeMessage,
 } from './auth'
 import type {
+  AudioFeatures,
   PlaylistTracksPage,
   PlaylistsPage,
+  SearchTracksResponse,
   SpotifyPlaylist,
   SpotifyTrack,
   SpotifyUser,
@@ -94,6 +96,39 @@ export async function spotifyPost<T>(path: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>
 }
 
+export async function spotifyDelete(path: string, body: unknown): Promise<void> {
+  const token = await getAccessToken()
+  const res = await fetch(`${API_ROOT}${path}`, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  })
+
+  if (res.status === 401) {
+    throw new Error('Session expired. Connect again.')
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(parseSpotifyError(res.status, err))
+  }
+}
+
+/** Search tracks via Spotify field filters (e.g. track:"…" artist:"…"). */
+export async function searchTracks(
+  query: string,
+  market?: string,
+  limit = 50
+): Promise<SpotifyTrack[]> {
+  const marketParam = market ? `&market=${encodeURIComponent(market)}` : ''
+  const res = await spotifyFetch<SearchTracksResponse>(
+    `/search?type=track&q=${encodeURIComponent(query)}&limit=${limit}${marketParam}`
+  )
+  return (res.tracks?.items ?? []).filter((t) => t?.id)
+}
+
 export async function getCurrentUser(): Promise<SpotifyUser> {
   return spotifyFetch<SpotifyUser>('/me')
 }
@@ -138,6 +173,29 @@ export async function getPlaylistTracks(
   }
 
   return all
+}
+
+type AudioFeaturesResponse = {
+  audio_features: (AudioFeatures | null)[]
+}
+
+/** Audio features for up to 100 track IDs per request; batches larger lists. */
+export async function getAudioFeatures(
+  trackIds: string[]
+): Promise<Map<string, AudioFeatures>> {
+  const map = new Map<string, AudioFeatures>()
+  const unique = [...new Set(trackIds)]
+  for (let i = 0; i < unique.length; i += 100) {
+    const chunk = unique.slice(i, i + 100)
+    const ids = chunk.map(encodeURIComponent).join(',')
+    const res = await spotifyFetch<AudioFeaturesResponse>(
+      `/audio-features?ids=${ids}`
+    )
+    for (const feat of res.audio_features ?? []) {
+      if (feat?.id) map.set(feat.id, feat)
+    }
+  }
+  return map
 }
 
 export type PlaylistKind = 'yours' | 'collaborative' | 'followed'

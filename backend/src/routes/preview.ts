@@ -43,53 +43,6 @@ async function fetchPreviewForTrack(trackId: string): Promise<string | null> {
   return extractPreviewFromEmbed(html)
 }
 
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  fn: (item: T) => Promise<R>
-): Promise<R[]> {
-  const results: R[] = new Array(items.length)
-  let nextIndex = 0
-
-  async function worker(): Promise<void> {
-    while (nextIndex < items.length) {
-      const index = nextIndex
-      nextIndex += 1
-      results[index] = await fn(items[index]!)
-    }
-  }
-
-  const workers = Array.from(
-    { length: Math.min(concurrency, items.length) },
-    () => worker()
-  )
-  await Promise.all(workers)
-  return results
-}
-
-previewRouter.post('/batch', async (req, res) => {
-  const { trackIds } = req.body as { trackIds?: string[] }
-  if (!Array.isArray(trackIds) || !trackIds.length) {
-    res.status(400).json({ error: 'trackIds array is required' })
-    return
-  }
-
-  const ids = trackIds
-    .filter((id) => typeof id === 'string' && /^[a-zA-Z0-9]{22}$/.test(id))
-    .slice(0, 100)
-
-  const entries = await mapWithConcurrency(ids, 12, async (trackId) => {
-    try {
-      const previewUrl = await fetchPreviewForTrack(trackId)
-      return [trackId, previewUrl] as const
-    } catch {
-      return [trackId, null] as const
-    }
-  })
-
-  res.json({ previews: Object.fromEntries(entries) })
-})
-
 previewRouter.get('/:trackId', async (req, res) => {
   const { trackId } = req.params
   if (!/^[a-zA-Z0-9]{22}$/.test(trackId)) {

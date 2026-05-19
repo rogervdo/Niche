@@ -15,6 +15,14 @@ import {
   spotifyFetch,
   type PlaylistKind,
 } from './spotify/api'
+import {
+  clearPlaylistCache,
+  getCachedPlaylists,
+  getCachedTracks,
+  setCachedPlaylists,
+  setCachedTracks,
+  upsertCachedPlaylist,
+} from './spotify/playlistCache'
 import { renderDiscoverView } from './discover/view'
 import { renderPlaylistDetail } from './playlist/detailView'
 import { IMAGE_SIZES, renderImg } from './spotify/images'
@@ -34,6 +42,21 @@ let displayName = ''
 let userImages: SpotifyImage[] | null = null
 let userMarket = 'US'
 let currentView: AppView = 'dashboard'
+let playlistsRefreshing = false
+
+const PLAYLIST_GRID_MIN = 160
+const PLAYLIST_GRID_MAX = 400
+const PLAYLIST_GRID_STEP = 24
+const PLAYLIST_GRID_STORAGE_KEY = 'niche_playlist_grid_min'
+
+function loadPlaylistGridMin(): number {
+  const raw = localStorage.getItem(PLAYLIST_GRID_STORAGE_KEY)
+  const n = raw ? Number(raw) : NaN
+  if (!Number.isFinite(n)) return 260
+  return Math.min(PLAYLIST_GRID_MAX, Math.max(PLAYLIST_GRID_MIN, Math.round(n)))
+}
+
+let playlistGridMin = loadPlaylistGridMin()
 
 function escapeHtml(text: string): string {
   const el = document.createElement('div')
@@ -123,6 +146,31 @@ function filteredPlaylists(): SpotifyPlaylist[] {
   })
 }
 
+function playlistGridSizeControlsHtml(): string {
+  const atMin = playlistGridMin <= PLAYLIST_GRID_MIN
+  const atMax = playlistGridMin >= PLAYLIST_GRID_MAX
+
+  return `
+    <div class="grid-size-control" aria-label="Grid size">
+      <button
+        type="button"
+        class="grid-size-btn"
+        id="playlist-grid-size-dec"
+        aria-label="More playlists per row"
+        ${atMin ? 'disabled' : ''}
+      >−</button>
+      <span class="grid-size-label" aria-hidden="true">${playlistGridMin}px</span>
+      <button
+        type="button"
+        class="grid-size-btn"
+        id="playlist-grid-size-inc"
+        aria-label="Fewer playlists per row"
+        ${atMax ? 'disabled' : ''}
+      >+</button>
+    </div>
+  `
+}
+
 function playlistCard(p: SpotifyPlaylist): string {
   const kind = classifyPlaylist(p, userId)
   const cover = renderImg({
@@ -183,6 +231,10 @@ async function openPlaylist(playlistId: string): Promise<void> {
       if (!playlists.some((p) => p.id === playlist!.id)) {
         playlists = [playlist, ...playlists]
       }
+      if (userId) {
+        setCachedPlaylists(userId, playlists)
+        upsertCachedPlaylist(playlist, userId)
+      }
     } catch (e) {
       if (currentView === 'discover') openDiscover()
       else renderDashboard()
@@ -192,10 +244,29 @@ async function openPlaylist(playlistId: string): Promise<void> {
   }
 
   currentView = 'detail'
+
+  const cachedTracks = getCachedTracks(playlistId, userMarket)
+  if (cachedTracks) {
+    renderPlaylistDetail(
+      app,
+      playlist,
+      cachedTracks,
+      classifyPlaylist(playlist, userId),
+      userMarket,
+      () => {
+        currentView = 'dashboard'
+        renderDashboard()
+      },
+      (updated) => setCachedTracks(playlistId, userMarket, updated)
+    )
+    return
+  }
+
   showLoading(`Loading “${playlist.name}”…`)
 
   try {
     const tracks = await getPlaylistTracks(playlistId, userMarket)
+    setCachedTracks(playlistId, userMarket, tracks)
     renderPlaylistDetail(
       app,
       playlist,
@@ -205,12 +276,42 @@ async function openPlaylist(playlistId: string): Promise<void> {
       () => {
         currentView = 'dashboard'
         renderDashboard()
-      }
+      },
+      (updated) => setCachedTracks(playlistId, userMarket, updated)
     )
   } catch (e) {
     currentView = 'dashboard'
     renderDashboard()
     showError(e)
+  }
+}
+
+async function loadPlaylists(force = false): Promise<void> {
+  if (!force) {
+    const cached = getCachedPlaylists(userId)
+    if (cached) {
+      playlists = cached
+      return
+    }
+  }
+
+  playlists = await getAllPlaylists()
+  setCachedPlaylists(userId, playlists)
+}
+
+async function refreshPlaylists(): Promise<void> {
+  if (playlistsRefreshing) return
+  playlistsRefreshing = true
+  if (currentView === 'dashboard') renderDashboard()
+
+  try {
+    clearPlaylistCache()
+    await loadPlaylists(true)
+  } catch (e) {
+    showError(e)
+  } finally {
+    playlistsRefreshing = false
+    if (currentView === 'dashboard') renderDashboard()
   }
 }
 
@@ -258,6 +359,16 @@ function renderDashboard(): void {
           placeholder="Search playlists or owners…"
           value="${escapeHtml(searchQuery)}"
         />
+        <button
+          type="button"
+          class="btn-refresh"
+          id="refresh-playlists-btn"
+          ${playlistsRefreshing ? 'disabled' : ''}
+          aria-busy="${playlistsRefreshing}"
+          title="Fetch latest playlists from Spotify"
+        >
+          ${playlistsRefreshing ? 'Refreshing…' : 'Refresh'}
+        </button>
         <div class="filters" role="tablist">
           ${(['all', 'yours', 'collaborative', 'followed'] as const)
             .map(
@@ -273,9 +384,12 @@ function renderDashboard(): void {
         </div>
       </div>
 
-      <p class="results-count">${visible.length} playlist${visible.length === 1 ? '' : 's'}</p>
+      <div class="results-row">
+        <p class="results-count">${visible.length} playlist${visible.length === 1 ? '' : 's'}</p>
+        ${playlistGridSizeControlsHtml()}
+      </div>
 
-      <div class="grid">
+      <div class="grid" style="--playlist-grid-min: ${playlistGridMin}px">
         ${
           visible.length
             ? visible.map(playlistCard).join('')
@@ -291,9 +405,14 @@ function renderDashboard(): void {
 
   document.getElementById('logout-btn')!.addEventListener('click', () => {
     clearAuth()
+    clearPlaylistCache()
     playlists = []
     userImages = null
     renderLogin(!isConfigured())
+  })
+
+  document.getElementById('refresh-playlists-btn')?.addEventListener('click', () => {
+    void refreshPlaylists()
   })
 
   document.getElementById('search')!.addEventListener('input', (e) => {
@@ -307,6 +426,24 @@ function renderDashboard(): void {
       renderDashboard()
     })
   })
+
+  const applyGridSize = (delta: number) => {
+    const next = Math.min(
+      PLAYLIST_GRID_MAX,
+      Math.max(PLAYLIST_GRID_MIN, playlistGridMin + delta)
+    )
+    if (next === playlistGridMin) return
+    playlistGridMin = next
+    localStorage.setItem(PLAYLIST_GRID_STORAGE_KEY, String(playlistGridMin))
+    renderDashboard()
+  }
+
+  document
+    .getElementById('playlist-grid-size-dec')
+    ?.addEventListener('click', () => applyGridSize(-PLAYLIST_GRID_STEP))
+  document
+    .getElementById('playlist-grid-size-inc')
+    ?.addEventListener('click', () => applyGridSize(PLAYLIST_GRID_STEP))
 
   document.querySelectorAll<HTMLButtonElement>('.card[data-playlist-id]').forEach(
     (card) => {
@@ -367,16 +504,22 @@ async function boot(): Promise<void> {
     return
   }
 
-  showLoading('Loading your playlists…')
-
   try {
     const user = await getCurrentUser()
     userId = user.id
-    playlists = await getAllPlaylists()
     displayName = user.display_name ?? user.id
     userImages = user.images
     userMarket = user.country ?? 'US'
-    renderDashboard()
+
+    const cached = getCachedPlaylists(userId)
+    if (cached) {
+      playlists = cached
+      renderDashboard()
+    } else {
+      showLoading('Loading your playlists…')
+      await loadPlaylists()
+      renderDashboard()
+    }
   } catch (e) {
     clearAuth()
     renderLogin(false)

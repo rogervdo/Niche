@@ -33,6 +33,8 @@ export interface SpotifyArtist {
 
 export interface SpotifyAlbum {
   name: string
+  release_date?: string
+  release_date_precision?: 'year' | 'month' | 'day'
   images: { url: string; width?: number | null; height?: number | null }[] | null
 }
 
@@ -41,9 +43,26 @@ export interface SpotifyTrack {
   name: string
   duration_ms: number
   preview_url: string | null
+  popularity?: number
+  uri?: string
   artists: SpotifyArtist[]
   album: SpotifyAlbum
   external_urls: { spotify: string }
+}
+
+export interface SearchTracksResponse {
+  tracks: {
+    items: SpotifyTrack[]
+    total: number
+  }
+}
+
+export interface AudioFeatures {
+  id: string
+  tempo: number
+  valence: number
+  danceability: number
+  acousticness: number
 }
 
 export interface PlaylistTrackItem {
