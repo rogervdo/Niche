@@ -4,7 +4,29 @@ import type { SpotifyTrack } from './types'
 export const MIN_SCORE_GAIN = 5
 
 const VARIANT_SUFFIX =
-  /\s*[\(\[](live|acoustic|karaoke|instrumental|commentary|demo|remix|mix|edit|version|cover|tribute|sped up|slowed|reprise).*[\)\]]/gi
+  /\s*[\(\[](live|acoustic|karaoke|instrumental|commentary|demo|mix|edit|version|cover|tribute|sped up|slowed|reprise).*[\)\]]/gi
+
+/** Track or album names matching these are never suggested as replacements. */
+const REMIX_TITLE_PATTERNS = [
+  /\bremix\b/i,
+  /\bremixed\b/i,
+  /\bremixes\b/i,
+  /\bre-?mix\b/i,
+]
+
+const REMIX_ALBUM_PATTERNS = [
+  /\bremix(es|ed)?\b/i,
+  /\bremix collection\b/i,
+]
+
+const LIVE_TITLE_PATTERNS = [
+  /\blive\b/i,
+  /\blive at\b/i,
+  /\blive from\b/i,
+  /\blive in\b/i,
+]
+
+const LIVE_ALBUM_PATTERNS = [/\blive\b/i, /\blive at\b/i, /\blive in\b/i]
 
 /** Album names containing these are deprioritized vs standard studio releases. */
 const ALBUM_PENALTY_RULES: { pattern: RegExp; penalty: number }[] = [
@@ -27,12 +49,35 @@ const ALBUM_PENALTY_RULES: { pattern: RegExp; penalty: number }[] = [
   { pattern: /\bre-?record(ed)?\b/i, penalty: 35 },
 ]
 
-export function normalizeTrackTitle(name: string): string {
+/** Remove remix markers in titles, e.g. "- Single Remix" or "(Foo Remix)". */
+export function stripRemixFromTitle(name: string): string {
   return name
-    .replace(VARIANT_SUFFIX, '')
-    .replace(/\s*-\s*(remaster(ed)?|live|acoustic|radio edit).*$/i, '')
+    .replace(/\s*\([^)]*\bremix\b[^)]*\)/gi, '')
+    .replace(/\s*-\s*[^-]*\bremix\b\s*$/i, '')
+    .trim()
+}
+
+/** Remove live markers in titles, e.g. "- Live Version" or "(Live at Wembley)". */
+export function stripLiveFromTitle(name: string): string {
+  return name
+    .replace(/\s*\([^)]*\blive\b[^)]*\)/gi, '')
+    .replace(/\s*-\s*[^-]*\blive\b[^-]*$/i, '')
+    .trim()
+}
+
+/** Studio-oriented title for search when the playlist track is a variant cut. */
+export function coreTitleForSearch(name: string): string {
+  return stripLiveFromTitle(stripRemixFromTitle(name))
     .replace(/\s+feat\.?\s+.+$/i, '')
     .replace(/\s+ft\.?\s+.+$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+export function normalizeTrackTitle(name: string): string {
+  return coreTitleForSearch(name)
+    .replace(VARIANT_SUFFIX, '')
+    .replace(/\s*-\s*(remaster(ed)?|live|acoustic|radio edit).*$/i, '')
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase()
@@ -49,6 +94,31 @@ export function normalizeAlbumName(name: string): string {
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase()
+}
+
+/** True for remix recordings (excluded from replace suggestions). */
+export function isRemixRecording(track: SpotifyTrack): boolean {
+  const title = track.name
+  const album = track.album.name
+  return (
+    REMIX_TITLE_PATTERNS.some((p) => p.test(title)) ||
+    REMIX_ALBUM_PATTERNS.some((p) => p.test(album))
+  )
+}
+
+/** True for live recordings (excluded from replace suggestions). */
+export function isLiveRecording(track: SpotifyTrack): boolean {
+  const title = track.name
+  const album = track.album.name
+  return (
+    LIVE_TITLE_PATTERNS.some((p) => p.test(title)) ||
+    LIVE_ALBUM_PATTERNS.some((p) => p.test(album))
+  )
+}
+
+/** Remixes and live versions are never suggested as replacements. */
+export function isExcludedRecording(track: SpotifyTrack): boolean {
+  return isRemixRecording(track) || isLiveRecording(track)
 }
 
 export function albumEditionPenalty(albumName: string): number {
@@ -133,6 +203,7 @@ export function findBestPopularityMatch(
 
   for (const c of candidates) {
     if (c.id === track.id) continue
+    if (isExcludedRecording(c)) continue
     if (primaryArtistName(c) !== artist) continue
     if (!titlesMatch(track.name, c.name)) continue
     if (!durationClose(track, c)) continue

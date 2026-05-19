@@ -34,9 +34,56 @@ const app = document.querySelector<HTMLDivElement>('#app')!
 type Filter = 'all' | PlaylistKind
 type AppView = 'dashboard' | 'discover' | 'detail'
 
+type PlaylistSortMode =
+  | 'library'
+  | 'name_asc'
+  | 'name_desc'
+  | 'tracks_desc'
+  | 'tracks_asc'
+  | 'owner_asc'
+  | 'owner_desc'
+  | 'kind'
+  | 'public_first'
+  | 'collaborative_first'
+
+const PLAYLIST_SORT_OPTIONS: { mode: PlaylistSortMode; label: string }[] = [
+  { mode: 'library', label: 'Spotify library order' },
+  { mode: 'name_asc', label: 'Name (A to Z)' },
+  { mode: 'name_desc', label: 'Name (Z to A)' },
+  { mode: 'tracks_desc', label: 'Most tracks' },
+  { mode: 'tracks_asc', label: 'Fewest tracks' },
+  { mode: 'owner_asc', label: 'Owner (A to Z)' },
+  { mode: 'owner_desc', label: 'Owner (Z to A)' },
+  { mode: 'kind', label: 'Type (yours, collaborative, followed)' },
+  { mode: 'public_first', label: 'Public first' },
+  { mode: 'collaborative_first', label: 'Collaborative first' },
+]
+
+const PLAYLIST_SORT_STORAGE_KEY = 'niche_playlist_sort'
+const PLAYLIST_SORT_MODES = new Set<PlaylistSortMode>(
+  PLAYLIST_SORT_OPTIONS.map((o) => o.mode)
+)
+
+const PLAYLIST_FILTER_STORAGE_KEY = 'niche_playlist_filter'
+const PLAYLIST_FILTERS = new Set<Filter>([
+  'all',
+  'yours',
+  'collaborative',
+  'followed',
+])
+
 let playlists: SpotifyPlaylist[] = []
 let userId = ''
-let activeFilter: Filter = 'all'
+
+function loadPlaylistFilter(): Filter {
+  const raw = localStorage.getItem(PLAYLIST_FILTER_STORAGE_KEY)
+  if (raw && PLAYLIST_FILTERS.has(raw as Filter)) {
+    return raw as Filter
+  }
+  return 'all'
+}
+
+let activeFilter: Filter = loadPlaylistFilter()
 let searchQuery = ''
 let displayName = ''
 let userImages: SpotifyImage[] | null = null
@@ -57,6 +104,16 @@ function loadPlaylistGridMin(): number {
 }
 
 let playlistGridMin = loadPlaylistGridMin()
+
+function loadPlaylistSortMode(): PlaylistSortMode {
+  const raw = localStorage.getItem(PLAYLIST_SORT_STORAGE_KEY)
+  if (raw && PLAYLIST_SORT_MODES.has(raw as PlaylistSortMode)) {
+    return raw as PlaylistSortMode
+  }
+  return 'library'
+}
+
+let playlistSortMode = loadPlaylistSortMode()
 
 function escapeHtml(text: string): string {
   const el = document.createElement('div')
@@ -144,6 +201,104 @@ function filteredPlaylists(): SpotifyPlaylist[] {
       (p.owner?.display_name ?? p.owner?.id ?? '').toLowerCase().includes(q)
     )
   })
+}
+
+function ownerName(p: SpotifyPlaylist): string {
+  return p.owner?.display_name ?? p.owner?.id ?? ''
+}
+
+function sortPlaylists(items: SpotifyPlaylist[]): SpotifyPlaylist[] {
+  if (playlistSortMode === 'library') return items
+
+  const libraryIndex = new Map(playlists.map((p, i) => [p.id, i]))
+  const kindRank: Record<PlaylistKind, number> = {
+    yours: 0,
+    collaborative: 1,
+    followed: 2,
+  }
+  const publicRank = (p: SpotifyPlaylist) =>
+    p.public === true ? 0 : p.public === false ? 1 : 2
+
+  const sorted = [...items]
+  sorted.sort((a, b) => {
+    switch (playlistSortMode) {
+      case 'library':
+        return (libraryIndex.get(a.id) ?? 0) - (libraryIndex.get(b.id) ?? 0)
+      case 'name_asc':
+        return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+      case 'name_desc':
+        return b.name.localeCompare(a.name, undefined, { sensitivity: 'base' })
+      case 'tracks_desc':
+        return b.tracks.total - a.tracks.total
+      case 'tracks_asc':
+        return a.tracks.total - b.tracks.total
+      case 'owner_asc':
+        return ownerName(a).localeCompare(ownerName(b), undefined, {
+          sensitivity: 'base',
+        })
+      case 'owner_desc':
+        return ownerName(b).localeCompare(ownerName(a), undefined, {
+          sensitivity: 'base',
+        })
+      case 'kind': {
+        const ka = kindRank[classifyPlaylist(a, userId)]
+        const kb = kindRank[classifyPlaylist(b, userId)]
+        if (ka !== kb) return ka - kb
+        return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+      }
+      case 'public_first': {
+        const diff = publicRank(a) - publicRank(b)
+        if (diff !== 0) return diff
+        return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+      }
+      case 'collaborative_first': {
+        const ca = a.collaborative ? 0 : 1
+        const cb = b.collaborative ? 0 : 1
+        if (ca !== cb) return ca - cb
+        return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+      }
+      default:
+        return 0
+    }
+  })
+  return sorted
+}
+
+function playlistSortMenuHtml(): string {
+  const activeLabel =
+    PLAYLIST_SORT_OPTIONS.find((o) => o.mode === playlistSortMode)?.label ??
+    'Spotify library order'
+
+  return `
+    <div class="detail-sort" data-sort-open="false">
+      <button
+        type="button"
+        class="detail-sort-trigger"
+        id="playlist-sort-trigger"
+        aria-haspopup="listbox"
+        aria-expanded="false"
+      >
+        <span class="detail-sort-label">${escapeHtml(activeLabel)}</span>
+        <span class="detail-sort-chevron" aria-hidden="true">▾</span>
+      </button>
+      <div class="detail-sort-menu" role="listbox" aria-label="Sort playlists" hidden>
+        ${PLAYLIST_SORT_OPTIONS.map(
+          (opt) => `
+          <button
+            type="button"
+            class="detail-sort-option ${opt.mode === playlistSortMode ? 'is-active' : ''}"
+            role="option"
+            aria-selected="${opt.mode === playlistSortMode}"
+            data-playlist-sort="${opt.mode}"
+          >
+            <span class="detail-sort-check" aria-hidden="true">${opt.mode === playlistSortMode ? '✓' : ''}</span>
+            <span>${escapeHtml(opt.label)}</span>
+          </button>
+        `
+        ).join('')}
+      </div>
+      </div>
+  `
 }
 
 function playlistGridSizeControlsHtml(): string {
@@ -315,9 +470,53 @@ async function refreshPlaylists(): Promise<void> {
   }
 }
 
+function setPlaylistSortMenuOpen(root: HTMLElement, open: boolean): void {
+  const wrap = root.querySelector<HTMLElement>('.detail-sort')
+  const trigger = root.querySelector<HTMLButtonElement>('#playlist-sort-trigger')
+  const menu = root.querySelector<HTMLElement>('.detail-sort-menu')
+  if (!wrap || !trigger || !menu) return
+  wrap.dataset.sortOpen = open ? 'true' : 'false'
+  trigger.setAttribute('aria-expanded', String(open))
+  menu.hidden = !open
+}
+
+function bindPlaylistSortMenu(root: HTMLElement): void {
+  const trigger = root.querySelector<HTMLButtonElement>('#playlist-sort-trigger')
+  const menu = root.querySelector<HTMLElement>('.detail-sort-menu')
+  if (!trigger || !menu) return
+
+  const close = () => setPlaylistSortMenuOpen(root, false)
+
+  trigger.addEventListener('click', (e) => {
+    e.stopPropagation()
+    const open =
+      root.querySelector<HTMLElement>('.detail-sort')?.dataset.sortOpen !== 'true'
+    setPlaylistSortMenuOpen(root, open)
+    if (open) {
+      setTimeout(() => {
+        document.addEventListener('click', close, { once: true })
+      }, 0)
+    }
+  })
+
+  menu.querySelectorAll<HTMLButtonElement>('[data-playlist-sort]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const mode = btn.dataset.playlistSort as PlaylistSortMode | undefined
+      if (!mode || mode === playlistSortMode) {
+        close()
+        return
+      }
+      playlistSortMode = mode
+      localStorage.setItem(PLAYLIST_SORT_STORAGE_KEY, playlistSortMode)
+      close()
+      renderDashboard()
+    })
+  })
+}
+
 function renderDashboard(): void {
   currentView = 'dashboard'
-  const visible = filteredPlaylists()
+  const visible = sortPlaylists(filteredPlaylists())
 
   app.innerHTML = `
     <div class="shell dashboard-shell">
@@ -386,7 +585,10 @@ function renderDashboard(): void {
 
       <div class="results-row">
         <p class="results-count">${visible.length} playlist${visible.length === 1 ? '' : 's'}</p>
-        ${playlistGridSizeControlsHtml()}
+        <div class="results-actions">
+          ${playlistSortMenuHtml()}
+          ${playlistGridSizeControlsHtml()}
+        </div>
       </div>
 
       <div class="grid" style="--playlist-grid-min: ${playlistGridMin}px">
@@ -423,6 +625,7 @@ function renderDashboard(): void {
   document.querySelectorAll<HTMLButtonElement>('.filter-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       activeFilter = btn.dataset.filter as Filter
+      localStorage.setItem(PLAYLIST_FILTER_STORAGE_KEY, activeFilter)
       renderDashboard()
     })
   })
@@ -444,6 +647,8 @@ function renderDashboard(): void {
   document
     .getElementById('playlist-grid-size-inc')
     ?.addEventListener('click', () => applyGridSize(PLAYLIST_GRID_STEP))
+
+  bindPlaylistSortMenu(app)
 
   document.querySelectorAll<HTMLButtonElement>('.card[data-playlist-id]').forEach(
     (card) => {

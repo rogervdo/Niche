@@ -1,7 +1,9 @@
 import { searchTracks, spotifyDelete, spotifyFetch, spotifyPost } from './api'
 import {
   albumEditionPenalty,
+  coreTitleForSearch,
   findBestPopularityMatch,
+  isExcludedRecording,
   normalizeAlbumName,
 } from './trackMatch'
 import type { SpotifyTrack } from './types'
@@ -14,14 +16,22 @@ export type ReplaceLookupResult =
 
 function searchQueriesForTrack(track: SpotifyTrack): string[] {
   const artist = track.artists[0]?.name ?? ''
-  const title = track.name.replace(/"/g, '')
   const artistQ = artist.replace(/"/g, '')
-  const queries = [`track:"${title}" artist:"${artistQ}"`]
+  const title = track.name.replace(/"/g, '')
+  const coreTitle = coreTitleForSearch(track.name).replace(/"/g, '')
+
+  const queries: string[] = []
+  // Prefer studio title first when the playlist track is a remix/live variant.
+  if (coreTitle && coreTitle !== title) {
+    queries.push(`track:"${coreTitle}" artist:"${artistQ}"`)
+  }
+  queries.push(`track:"${title}" artist:"${artistQ}"`)
 
   const baseAlbum = normalizeAlbumName(track.album.name)
-  if (baseAlbum && albumEditionPenalty(track.album.name) > 0) {
+  if (baseAlbum && (albumEditionPenalty(track.album.name) > 0 || isExcludedRecording(track))) {
     const albumQ = baseAlbum.replace(/"/g, '')
-    queries.push(`track:"${title}" artist:"${artistQ}" album:"${albumQ}"`)
+    const searchTitle = coreTitle || title
+    queries.push(`track:"${searchTitle}" artist:"${artistQ}" album:"${albumQ}"`)
   }
 
   return queries
