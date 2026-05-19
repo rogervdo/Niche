@@ -143,16 +143,30 @@ const RECOMMENDATION_SEED_GENRES = new Set([
   'world-music',
 ])
 
-export function recommendationSeedGenres(searchTerms: string[]): string[] {
+export function recommendationSeedGenres(
+  searchTerms: string[],
+  configuredGenres: string[] = []
+): string[] {
+  const explicit = new Set(
+    configuredGenres.map((g) => g.toLowerCase().trim()).filter(Boolean)
+  )
   const seeds = new Set<string>()
   for (const raw of searchTerms) {
     const key = raw.toLowerCase().trim().replace(/\s+/g, '-')
-    if (RECOMMENDATION_SEED_GENRES.has(key)) seeds.add(key)
-    const aliases = GENRE_ALIASES[raw.toLowerCase().trim()] ?? GENRE_ALIASES[key]
+    const rawKey = raw.toLowerCase().trim()
+    if (RECOMMENDATION_SEED_GENRES.has(key)) {
+      if (explicit.has(rawKey) || !BROAD_GENRE_MATCH_TAGS.has(rawKey)) {
+        seeds.add(key)
+      }
+    }
+    const aliases = GENRE_ALIASES[rawKey] ?? GENRE_ALIASES[key]
     if (aliases) {
       for (const alias of aliases) {
         const normalized = alias.replace(/\s+/g, '-')
-        if (RECOMMENDATION_SEED_GENRES.has(normalized)) seeds.add(normalized)
+        if (!RECOMMENDATION_SEED_GENRES.has(normalized)) continue
+        if (explicit.has(alias) || !BROAD_GENRE_MATCH_TAGS.has(alias)) {
+          seeds.add(normalized)
+        }
       }
     }
   }
@@ -186,6 +200,31 @@ export function expandGenreTargets(configured: string[]): string[] {
     }
   }
   return [...expanded]
+}
+
+const BROAD_GENRE_MATCH_TAGS = new Set([
+  'anime',
+  'rock',
+  'pop',
+  'electronic',
+  'alternative',
+  'indie',
+  'metal',
+  'punk',
+  'folk',
+  'jazz',
+  'hip hop',
+  'rap',
+  'post-rock',
+])
+
+export function genreMatchTargets(configured: string[]): string[] {
+  const explicit = new Set(
+    configured.map((g) => g.toLowerCase().trim()).filter(Boolean)
+  )
+  return expandGenreTargets(configured).filter(
+    (tag) => explicit.has(tag) || !BROAD_GENRE_MATCH_TAGS.has(tag)
+  )
 }
 
 export function genreOverlapScore(

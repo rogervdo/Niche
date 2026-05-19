@@ -10,6 +10,7 @@ import {
 import type { PlaylistOptions } from './options'
 import {
   expandGenreTargets,
+  genreMatchTargets,
   genreOverlapScore,
   genreSearchTerms,
   genreSearchTermsFromTargets,
@@ -110,7 +111,8 @@ function scoreArtist(
   maxListeners: number,
   excludeIds: Set<string>,
   knownArtistIds: Set<string>,
-  mode: RankMode
+  mode: RankMode,
+  requireGenreMatch: boolean
 ): number {
   if (excludeIds.has(artist.id)) return -1
 
@@ -122,18 +124,24 @@ function scoreArtist(
 
   const overlap = genreOverlapScore(artist.genres, targets)
 
-  if (mode === 'strict' && targets.length && overlap === 0) return -1
+  if (requireGenreMatch) {
+    if (!artist.genres.length || overlap === 0) return -1
+  } else if (mode === 'strict' && targets.length && overlap === 0) {
+    return -1
+  }
 
   let score = 1
 
   if (overlap > 0) {
     score += overlap * 12
-  } else if (mode === 'relaxed' && targets.length) {
+  } else if (!requireGenreMatch && mode === 'relaxed' && targets.length) {
     score += 2
-  } else if (mode === 'popularity-only') {
+  } else if (!requireGenreMatch && mode === 'popularity-only') {
     score += 1
   } else if (!targets.length) {
     score += 4
+  } else if (requireGenreMatch) {
+    return -1
   }
 
   const mid = (popMin + popMax) / 2
@@ -164,13 +172,20 @@ function randomSearchBaseOffset(): number {
   return steps[Math.floor(Math.random() * steps.length)]!
 }
 
+function searchPagesForPool(excludeCount: number): number {
+  if (excludeCount >= 60) return 4
+  if (excludeCount >= 30) return 3
+  return SEARCH_PAGES
+}
+
 async function searchArtistsByGenre(
   genre: string,
-  baseOffset: number
+  baseOffset: number,
+  pages = SEARCH_PAGES
 ): Promise<string[]> {
   const ids: string[] = []
   const q = encodeURIComponent(`genre:"${genre}"`)
-  for (let page = 0; page < SEARCH_PAGES; page += 1) {
+  for (let page = 0; page < pages; page += 1) {
     const offset = baseOffset + page * SEARCH_LIMIT
     if (offset > 950) break
     const res = await spotifyFetch<{
@@ -188,11 +203,12 @@ async function searchArtistsByGenre(
 /** Keyword search — works when genre:"..." queries return few results (e.g. j-rock). */
 async function searchArtistsByKeyword(
   term: string,
-  baseOffset: number
+  baseOffset: number,
+  pages = SEARCH_PAGES
 ): Promise<string[]> {
   const ids: string[] = []
   const q = encodeURIComponent(term)
-  for (let page = 0; page < SEARCH_PAGES; page += 1) {
+  for (let page = 0; page < pages; page += 1) {
     const offset = baseOffset + page * SEARCH_LIMIT
     if (offset > 950) break
     const res = await spotifyFetch<{
@@ -210,9 +226,10 @@ async function searchArtistsByKeyword(
 async function gatherRecommendationArtistIds(
   searchGenres: string[],
   anchorIds: string[],
-  popularity: [number, number]
+  popularity: [number, number],
+  configuredGenres: string[]
 ): Promise<string[]> {
-  const genreSeeds = recommendationSeedGenres(searchGenres)
+  const genreSeeds = recommendationSeedGenres(searchGenres, configuredGenres)
   const artistSeeds = anchorIds.slice(0, 5)
   if (!genreSeeds.length && !artistSeeds.length) return []
 
@@ -271,10 +288,13 @@ async function gatherRecommendationArtistIds(
 async function gatherCandidateArtistIds(
   anchorIds: string[],
   searchGenres: string[],
-  popularity: [number, number]
+  popularity: [number, number],
+  excludeCount: number,
+  configuredGenres: string[]
 ): Promise<string[]> {
   const pool: string[] = []
   const searchOffset = randomSearchBaseOffset()
+  const searchPages = searchPagesForPool(excludeCount)
   const relatedLimit = anchorIds.length > 0 ? RELATED_PER_ANCHOR : 0
 
   for (const anchorId of anchorIds) {
@@ -290,13 +310,13 @@ async function gatherCandidateArtistIds(
 
   for (const genre of searchGenres) {
     try {
-      const found = await searchArtistsByGenre(genre, searchOffset)
+      const found = await searchArtistsByGenre(genre, searchOffset, searchPages)
       pool.push(...found)
     } catch {
       // skip
     }
     try {
-      const keyword = await searchArtistsByKeyword(genre, searchOffset)
+      const keyword = await searchArtistsByKeyword(genre, searchOffset, searchPages)
       pool.push(...keyword)
     } catch {
       // skip
@@ -307,7 +327,8 @@ async function gatherCandidateArtistIds(
     const recommended = await gatherRecommendationArtistIds(
       searchGenres,
       anchorIds,
-      popularity
+      popularity,
+      configuredGenres
     )
     pool.push(...recommended)
   } catch {
@@ -324,7 +345,8 @@ function rankNicheArtists(
   maxListeners: number,
   excludeIds: Set<string>,
   knownArtistIds: Set<string>,
-  mode: RankMode
+  mode: RankMode,
+  requireGenreMatch: boolean
 ): ScoredArtist[] {
   const scored: ScoredArtist[] = []
   for (const artist of candidates) {
@@ -335,7 +357,8 @@ function rankNicheArtists(
       maxListeners,
       excludeIds,
       knownArtistIds,
-      mode
+      mode,
+      requireGenreMatch
     )
     if (score > 0) scored.push({ id: artist.id, score })
   }
@@ -372,14 +395,15 @@ async function fillPlaylistFromRanked(
   market: string,
   limit: number,
   knownArtistIds: Set<string>,
-  allowKnownArtists: boolean
-): Promise<{ uris: string[]; artistCount: number }> {
+  allowKnownArtists: boolean,
+  skipArtistIds: Set<string> = new Set()
+): Promise<{ uris: string[]; artistCount: number; usedIds: Set<string> }> {
   const uris: string[] = []
   const usedArtists = new Set<string>()
 
   for (const { id } of ranked) {
     if (uris.length >= limit) break
-    if (usedArtists.has(id)) continue
+    if (usedArtists.has(id) || skipArtistIds.has(id)) continue
     if (!allowKnownArtists && knownArtistIds.has(id)) continue
     const uri = await getArtistTopTrackUri(id, market)
     if (!uri) continue
@@ -387,7 +411,7 @@ async function fillPlaylistFromRanked(
     uris.push(uri)
   }
 
-  return { uris, artistCount: usedArtists.size }
+  return { uris, artistCount: usedArtists.size, usedIds: usedArtists }
 }
 
 export interface ArtistDiscoverResult {
@@ -413,7 +437,9 @@ export async function pickPlaylistFromNicheArtists(
   const anchorDetails =
     anchorIds.length > 0 ? await batchGetArtists(anchorIds) : []
 
-  let targetGenres = deriveTargetGenres(anchorDetails, options.genres)
+  let targetGenres = userSetGenres
+    ? genreMatchTargets(options.genres)
+    : deriveTargetGenres(anchorDetails, options.genres)
   if (!targetGenres.length && !userSetGenres) {
     targetGenres = await inferGenresFromTopArtists()
   }
@@ -437,16 +463,20 @@ export async function pickPlaylistFromNicheArtists(
   const candidateIds = await gatherCandidateArtistIds(
     anchorIds,
     searchGenres,
-    options.artistPopularity
+    options.artistPopularity,
+    excludeIds.size,
+    options.genres
   )
   const candidates = await batchGetArtists(candidateIds)
 
   const modes: RankMode[] = userSetGenres
-    ? ['strict', 'relaxed', 'popularity-only']
+    ? ['strict']
     : ['relaxed', 'popularity-only']
+  const requireGenreMatch = userSetGenres
 
   let uris: string[] = []
   let artistCount = 0
+  const pickedArtistIds = new Set<string>()
 
   for (const mode of modes) {
     const ranked = diversifyRanked(
@@ -457,21 +487,25 @@ export async function pickPlaylistFromNicheArtists(
         options.maxListeners,
         excludeIds,
         knownArtistIds,
-        mode
+        mode,
+        requireGenreMatch
       )
     )
-    const allowKnown = mode === 'popularity-only'
+    const remaining = PLAYLIST_SIZE - uris.length
+    if (remaining <= 0) break
+
+    const allowKnown = !requireGenreMatch && mode === 'popularity-only'
     const filled = await fillPlaylistFromRanked(
       ranked,
       market,
-      PLAYLIST_SIZE,
+      remaining,
       knownArtistIds,
-      allowKnown
+      allowKnown,
+      pickedArtistIds
     )
-    if (filled.uris.length > uris.length) {
-      uris = filled.uris
-      artistCount = filled.artistCount
-    }
+    uris.push(...filled.uris)
+    for (const id of filled.usedIds) pickedArtistIds.add(id)
+    artistCount = pickedArtistIds.size
     if (uris.length >= PLAYLIST_SIZE) break
   }
 
