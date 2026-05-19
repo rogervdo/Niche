@@ -215,16 +215,19 @@ function replaceButtonHtml(
   playlistPosition: number,
   canEdit: boolean
 ): string {
-  if (!canEdit) return ''
+  const label = canEdit ? 'Replace' : 'Find popular'
+  const title = canEdit
+    ? 'Search & replace with the most popular version'
+    : 'Search for a more popular version and open in Spotify'
   return `
     <button
       type="button"
       class="btn-track-replace"
       data-track-id="${track.id}"
       data-playlist-position="${playlistPosition}"
-      title="Search & replace with the most popular version"
-      aria-label="Search and replace ${escapeHtml(track.name)}"
-    >Replace</button>
+      title="${title}"
+      aria-label="${canEdit ? 'Search and replace' : 'Find popular version of'} ${escapeHtml(track.name)}"
+    >${label}</button>
   `
 }
 
@@ -356,8 +359,10 @@ function previewPanel(
               : ''
           }
           ${
-            canEdit && playlistPosition != null
-              ? `<button type="button" class="btn-track-replace" data-track-id="${track.id}" data-playlist-position="${playlistPosition}">Search & replace</button>`
+            playlistPosition != null
+              ? `<button type="button" class="btn-track-replace" data-track-id="${track.id}" data-playlist-position="${playlistPosition}">${
+                  canEdit ? 'Search & replace' : 'Find popular version'
+                }</button>`
               : ''
           }
           <a
@@ -810,7 +815,7 @@ function bindTrackReplace(root: HTMLElement): void {
 
   root.addEventListener('click', (e) => {
     const ctx = detailReplaceCtx
-    if (!ctx?.canEdit) return
+    if (!ctx) return
 
     const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(
       '.btn-track-replace[data-playlist-position][data-track-id]'
@@ -860,6 +865,7 @@ function bindTrackReplace(root: HTMLElement): void {
       track: entry.track,
       playlistPosition,
       market: ctx.market,
+      allowPlaylistReplace: ctx.canEdit,
       onSuccess: (candidate) => {
         const updated = [...ctx.entries]
         updated[entryIndex] = { ...entry, track: candidate }

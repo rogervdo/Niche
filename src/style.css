@@ -1565,6 +1565,11 @@ code {
   cursor: not-allowed;
 }
 
+.replace-modal-actions .btn-open-spotify {
+  margin-top: 0;
+  text-decoration: none;
+}
+
 @media (max-width: 520px) {
   .replace-compare {
     flex-direction: column;

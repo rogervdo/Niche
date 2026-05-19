@@ -480,6 +480,31 @@ function setPlaylistSortMenuOpen(root: HTMLElement, open: boolean): void {
   menu.hidden = !open
 }
 
+function bindPlaylistCards(root: HTMLElement): void {
+  root.querySelectorAll<HTMLButtonElement>('.card[data-playlist-id]').forEach((card) => {
+    card.addEventListener('click', () => {
+      const id = card.dataset.playlistId
+      if (id) void openPlaylist(id)
+    })
+  })
+}
+
+function updateDashboardResults(): void {
+  const visible = sortPlaylists(filteredPlaylists())
+  const grid = app.querySelector('.grid')
+  const countEl = app.querySelector('.results-count')
+  if (!grid || !countEl) {
+    renderDashboard()
+    return
+  }
+
+  countEl.textContent = `${visible.length} playlist${visible.length === 1 ? '' : 's'}`
+  grid.innerHTML = visible.length
+    ? visible.map(playlistCard).join('')
+    : '<p class="empty">No playlists match your filters.</p>'
+  bindPlaylistCards(app)
+}
+
 function bindPlaylistSortMenu(root: HTMLElement): void {
   const trigger = root.querySelector<HTMLButtonElement>('#playlist-sort-trigger')
   const menu = root.querySelector<HTMLElement>('.detail-sort-menu')
@@ -619,7 +644,7 @@ function renderDashboard(): void {
 
   document.getElementById('search')!.addEventListener('input', (e) => {
     searchQuery = (e.target as HTMLInputElement).value
-    renderDashboard()
+    updateDashboardResults()
   })
 
   document.querySelectorAll<HTMLButtonElement>('.filter-btn').forEach((btn) => {
@@ -650,14 +675,7 @@ function renderDashboard(): void {
 
   bindPlaylistSortMenu(app)
 
-  document.querySelectorAll<HTMLButtonElement>('.card[data-playlist-id]').forEach(
-    (card) => {
-      card.addEventListener('click', () => {
-        const id = card.dataset.playlistId
-        if (id) openPlaylist(id)
-      })
-    }
-  )
+  bindPlaylistCards(app)
 }
 
 function showError(err: unknown): void {

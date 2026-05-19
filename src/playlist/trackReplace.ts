@@ -115,10 +115,20 @@ export async function runTrackReplaceFlow(opts: {
   /** 0-based index in the full Spotify playlist (includes unavailable rows). */
   playlistPosition: number
   market: string
+  /** When false (e.g. followed playlists), search only — open the match in Spotify instead of editing the playlist. */
+  allowPlaylistReplace?: boolean
   onSuccess: (newTrack: SpotifyTrack) => void
   onError: (message: string) => void
 }): Promise<void> {
-  const { playlistId, track, playlistPosition, market, onSuccess, onError } = opts
+  const {
+    playlistId,
+    track,
+    playlistPosition,
+    market,
+    allowPlaylistReplace = true,
+    onSuccess,
+    onError,
+  } = opts
 
   let closeModal = () => {}
 
@@ -141,7 +151,9 @@ export async function runTrackReplaceFlow(opts: {
 
   closeModal = showModal(`
     <div class="replace-modal" role="dialog" aria-labelledby="replace-modal-title">
-      <h2 id="replace-modal-title" class="replace-modal-title">Search & replace</h2>
+      <h2 id="replace-modal-title" class="replace-modal-title">${
+        allowPlaylistReplace ? 'Search & replace' : 'Find popular version'
+      }</h2>
       <p class="replace-modal-body">Searching for a more popular version…</p>
     </div>
   `).close
@@ -185,9 +197,14 @@ export async function runTrackReplaceFlow(opts: {
   const candidate = lookup.candidate
   closeModal()
 
+  const spotifyUrl = candidate.external_urls.spotify
   const confirmModal = showModal(`
     <div class="replace-modal replace-modal-confirm" role="dialog" aria-labelledby="replace-modal-title">
-      <h2 id="replace-modal-title" class="replace-modal-title">Replace with popular version?</h2>
+      <h2 id="replace-modal-title" class="replace-modal-title">${
+        allowPlaylistReplace
+          ? 'Replace with popular version?'
+          : 'More popular version found'
+      }</h2>
       <p class="replace-modal-preview-hint">Hover album art to preview</p>
       <div class="replace-compare">
         <div class="replace-compare-col">
@@ -214,10 +231,18 @@ export async function runTrackReplaceFlow(opts: {
           </div>
         </div>
       </div>
-      <p class="replace-modal-hint">Replaces this track in the playlist at the same position.</p>
+      <p class="replace-modal-hint">${
+        allowPlaylistReplace
+          ? 'Replaces this track in the playlist at the same position.'
+          : 'Followed playlists are read-only — open the suggested track in Spotify.'
+      }</p>
       <div class="replace-modal-actions">
         <button type="button" class="btn-replace-cancel" id="replace-cancel">Cancel</button>
-        <button type="button" class="btn-replace-confirm" id="replace-confirm">Replace</button>
+        ${
+          allowPlaylistReplace
+            ? '<button type="button" class="btn-replace-confirm" id="replace-confirm">Replace</button>'
+            : `<a class="btn-replace-confirm btn-open-spotify" id="replace-open-spotify" href="${escapeHtml(spotifyUrl)}" target="_blank" rel="noreferrer">Open in Spotify</a>`
+        }
       </div>
     </div>
   `)
@@ -225,9 +250,17 @@ export async function runTrackReplaceFlow(opts: {
   bindReplaceModalPreviews(confirmModal.overlay)
 
   const cancelBtn = confirmModal.overlay.querySelector<HTMLButtonElement>('#replace-cancel')
-  const confirmBtn = confirmModal.overlay.querySelector<HTMLButtonElement>('#replace-confirm')
 
   cancelBtn?.addEventListener('click', () => closeModal())
+
+  if (!allowPlaylistReplace) {
+    confirmModal.overlay
+      .querySelector('#replace-open-spotify')
+      ?.addEventListener('click', () => closeModal())
+    return
+  }
+
+  const confirmBtn = confirmModal.overlay.querySelector<HTMLButtonElement>('#replace-confirm')
 
   confirmBtn?.addEventListener('click', () => {
     void (async () => {
