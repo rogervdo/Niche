@@ -1,4 +1,4 @@
-import type { SpotifyPlaylist, SpotifyTrack } from './types'
+import type { PlaylistTrackEntry, SpotifyPlaylist, SpotifyTrack } from './types'
 
 const PLAYLISTS_KEY = 'niche_playlists_cache_v1'
 const TRACKS_KEY = 'niche_tracks_cache_v1'
@@ -10,7 +10,12 @@ interface PlaylistsCacheEntry {
 }
 
 interface TracksCacheStore {
-  [key: string]: { tracks: SpotifyTrack[]; fetchedAt: number }
+  [key: string]: {
+    tracks: SpotifyTrack[]
+    /** Spotify playlist position per track (parallel to tracks). */
+    positions: number[]
+    fetchedAt: number
+  }
 }
 
 let memoryPlaylists: PlaylistsCacheEntry | null = null
@@ -95,14 +100,49 @@ export function getCachedTracks(
   return store[tracksKey(playlistId, market)]?.tracks ?? null
 }
 
+export function getCachedPlaylistEntries(
+  playlistId: string,
+  market: string
+): PlaylistTrackEntry[] | null {
+  const entry = readTracksStore()[tracksKey(playlistId, market)]
+  if (!entry?.positions || entry.positions.length !== entry.tracks.length) {
+    return null
+  }
+  return entry.tracks.map((track, i) => ({
+    track,
+    position: entry.positions[i]!,
+    uri: track.uri ?? `spotify:track:${track.id}`,
+  }))
+}
+
+export function setCachedEntries(
+  playlistId: string,
+  market: string,
+  entries: PlaylistTrackEntry[]
+): void {
+  const store = readTracksStore()
+  store[tracksKey(playlistId, market)] = {
+    tracks: entries.map((e) => e.track),
+    positions: entries.map((e) => e.position),
+    fetchedAt: Date.now(),
+  }
+  writeTracksStore(store)
+}
+
 export function setCachedTracks(
   playlistId: string,
   market: string,
   tracks: SpotifyTrack[]
 ): void {
-  const store = readTracksStore()
-  store[tracksKey(playlistId, market)] = { tracks, fetchedAt: Date.now() }
-  writeTracksStore(store)
+  setCachedEntries(
+    playlistId,
+    market,
+    tracks.map((track, position) => ({
+      track,
+      position,
+      uri: track.uri ?? `spotify:track:${track.id}`,
+    }))
+  )
 }
 
 export function clearPlaylistCache(): void {

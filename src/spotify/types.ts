@@ -38,6 +38,11 @@ export interface SpotifyAlbum {
   images: { url: string; width?: number | null; height?: number | null }[] | null
 }
 
+export interface SpotifyLinkedFrom {
+  uri?: string
+  id?: string
+}
+
 export interface SpotifyTrack {
   id: string
   name: string
@@ -45,6 +50,8 @@ export interface SpotifyTrack {
   preview_url: string | null
   popularity?: number
   uri?: string
+  /** Present on playlist items when the row links to another recording. */
+  linked_from?: SpotifyLinkedFrom
   artists: SpotifyArtist[]
   album: SpotifyAlbum
   external_urls: { spotify: string }
@@ -65,8 +72,17 @@ export interface AudioFeatures {
   acousticness: number
 }
 
+/** One row in a playlist with its index and URI for edits. */
+export interface PlaylistTrackEntry {
+  position: number
+  uri: string
+  track: SpotifyTrack
+}
+
 export interface PlaylistTrackItem {
-  track: SpotifyTrack | null
+  track?: SpotifyTrack | null
+  item?: SpotifyTrack | null
+  is_local?: boolean
 }
 
 export interface PlaylistTracksPage {

@@ -11,16 +11,16 @@ import {
   classifyPlaylist,
   getAllPlaylists,
   getCurrentUser,
-  getPlaylistTracks,
+  getPlaylistTrackEntries,
   spotifyFetch,
   type PlaylistKind,
 } from './spotify/api'
 import {
   clearPlaylistCache,
   getCachedPlaylists,
-  getCachedTracks,
+  getCachedPlaylistEntries,
   setCachedPlaylists,
-  setCachedTracks,
+  setCachedEntries,
   upsertCachedPlaylist,
 } from './spotify/playlistCache'
 import { renderDiscoverView } from './discover/view'
@@ -400,19 +400,19 @@ async function openPlaylist(playlistId: string): Promise<void> {
 
   currentView = 'detail'
 
-  const cachedTracks = getCachedTracks(playlistId, userMarket)
-  if (cachedTracks) {
+  const cachedEntries = getCachedPlaylistEntries(playlistId, userMarket)
+  if (cachedEntries) {
     renderPlaylistDetail(
       app,
       playlist,
-      cachedTracks,
+      cachedEntries,
       classifyPlaylist(playlist, userId),
       userMarket,
       () => {
         currentView = 'dashboard'
         renderDashboard()
       },
-      (updated) => setCachedTracks(playlistId, userMarket, updated)
+      (updated) => setCachedEntries(playlistId, userMarket, updated)
     )
     return
   }
@@ -420,19 +420,19 @@ async function openPlaylist(playlistId: string): Promise<void> {
   showLoading(`Loading “${playlist.name}”…`)
 
   try {
-    const tracks = await getPlaylistTracks(playlistId, userMarket)
-    setCachedTracks(playlistId, userMarket, tracks)
+    const entries = await getPlaylistTrackEntries(playlistId, userMarket)
+    setCachedEntries(playlistId, userMarket, entries)
     renderPlaylistDetail(
       app,
       playlist,
-      tracks,
+      entries,
       classifyPlaylist(playlist, userId),
       userMarket,
       () => {
         currentView = 'dashboard'
         renderDashboard()
       },
-      (updated) => setCachedTracks(playlistId, userMarket, updated)
+      (updated) => setCachedEntries(playlistId, userMarket, updated)
     )
   } catch (e) {
     currentView = 'dashboard'

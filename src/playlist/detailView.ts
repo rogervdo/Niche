@@ -1,10 +1,18 @@
 import { IMAGE_SIZES, renderImg } from '../spotify/images'
-import type { AudioFeatures, SpotifyPlaylist, SpotifyTrack } from '../spotify/types'
+import type {
+  AudioFeatures,
+  PlaylistTrackEntry,
+  SpotifyPlaylist,
+  SpotifyTrack,
+} from '../spotify/types'
 import { getAudioFeatures, type PlaylistKind } from '../spotify/api'
-import { setCachedTracks } from '../spotify/playlistCache'
+import { setCachedEntries } from '../spotify/playlistCache'
+import { isPlaylistDebugEnabled, playlistDebug, playlistDebugWarn } from '../spotify/playlistDebug'
 import { playPreview, stopPreview, unlockPreviewAudio, getPreviewError } from './previewPlayer'
 import { resolvePreviewUrl } from '../spotify/preview'
 import { runTrackReplaceFlow } from './trackReplace'
+import { runDuplicateDetectFlow } from './detectDuplicates'
+import { duplicateTrackIds } from '../spotify/trackDuplicates'
 
 type DetailViewMode = 'list' | 'grid'
 
@@ -62,19 +70,23 @@ let sortMode: SortMode = 'playlist'
 let audioFeaturesById: Map<string, AudioFeatures> | null = null
 let audioFeaturesLoading = false
 let currentPlaylistId: string | null = null
+let highlightedDuplicateIds: Set<string> | null = null
+
+type DisplayRow = { track: SpotifyTrack; playlistPosition: number }
 
 /** Current detail view context for delegated replace clicks (survives re-renders). */
 let detailReplaceCtx: {
   playlist: SpotifyPlaylist
-  tracks: SpotifyTrack[]
+  entries: PlaylistTrackEntry[]
   kind: PlaylistKind
   market: string
   canEdit: boolean
   onBack: () => void
-  onTracksUpdated?: (tracks: SpotifyTrack[]) => void
+  onTracksUpdated?: (entries: PlaylistTrackEntry[]) => void
 } | null = null
 
 let replaceClickBound = false
+let duplicateClickBound = false
 
 function resetSortState(playlistId: string): void {
   if (currentPlaylistId === playlistId) return
@@ -82,6 +94,11 @@ function resetSortState(playlistId: string): void {
   sortMode = 'playlist'
   audioFeaturesById = null
   audioFeaturesLoading = false
+  highlightedDuplicateIds = null
+}
+
+function isDuplicateHighlight(trackId: string): boolean {
+  return highlightedDuplicateIds?.has(trackId) ?? false
 }
 
 function primaryArtist(track: SpotifyTrack): string {
@@ -110,45 +127,47 @@ function featureValue(
   return features?.get(track.id)?.[key] ?? -1
 }
 
-function sortTracks(
-  tracks: SpotifyTrack[],
+function sortPlaylistRows(
+  rows: DisplayRow[],
   mode: SortMode,
   features: Map<string, AudioFeatures> | null
-): SpotifyTrack[] {
-  if (mode === 'playlist') return tracks
+): DisplayRow[] {
+  if (mode === 'playlist') return rows
 
-  const sorted = [...tracks]
+  const sorted = [...rows]
   sorted.sort((a, b) => {
+    const ta = a.track
+    const tb = b.track
     switch (mode) {
       case 'artist': {
-        const cmp = compareText(primaryArtist(a), primaryArtist(b))
-        return cmp !== 0 ? cmp : compareText(a.name, b.name)
+        const cmp = compareText(primaryArtist(ta), primaryArtist(tb))
+        return cmp !== 0 ? cmp : compareText(ta.name, tb.name)
       }
       case 'album': {
-        const cmp = compareText(a.album.name, b.album.name)
-        return cmp !== 0 ? cmp : compareText(a.name, b.name)
+        const cmp = compareText(ta.album.name, tb.album.name)
+        return cmp !== 0 ? cmp : compareText(ta.name, tb.name)
       }
       case 'popularity':
-        return (a.popularity ?? 0) - (b.popularity ?? 0)
+        return (ta.popularity ?? 0) - (tb.popularity ?? 0)
       case 'popularity_desc':
-        return (b.popularity ?? 0) - (a.popularity ?? 0)
+        return (tb.popularity ?? 0) - (ta.popularity ?? 0)
       case 'release_date':
-        return releaseDateMs(a) - releaseDateMs(b)
+        return releaseDateMs(ta) - releaseDateMs(tb)
       case 'tempo':
-        return featureValue(a, features, 'tempo') - featureValue(b, features, 'tempo')
+        return featureValue(ta, features, 'tempo') - featureValue(tb, features, 'tempo')
       case 'valence':
-        return featureValue(b, features, 'valence') - featureValue(a, features, 'valence')
+        return featureValue(tb, features, 'valence') - featureValue(ta, features, 'valence')
       case 'danceability':
         return (
-          featureValue(b, features, 'danceability') -
-          featureValue(a, features, 'danceability')
+          featureValue(tb, features, 'danceability') -
+          featureValue(ta, features, 'danceability')
         )
       case 'duration':
-        return a.duration_ms - b.duration_ms
+        return ta.duration_ms - tb.duration_ms
       case 'acousticness':
         return (
-          featureValue(b, features, 'acousticness') -
-          featureValue(a, features, 'acousticness')
+          featureValue(tb, features, 'acousticness') -
+          featureValue(ta, features, 'acousticness')
         )
       default:
         return 0
@@ -191,20 +210,26 @@ function popularityBadgeHtml(track: SpotifyTrack): string {
   return `<span class="track-popularity-badge" aria-label="Popularity ${pop}">${pop}</span>`
 }
 
-function replaceButtonHtml(track: SpotifyTrack, canEdit: boolean): string {
+function replaceButtonHtml(
+  track: SpotifyTrack,
+  playlistPosition: number,
+  canEdit: boolean
+): string {
   if (!canEdit) return ''
   return `
     <button
       type="button"
       class="btn-track-replace"
       data-track-id="${track.id}"
+      data-playlist-position="${playlistPosition}"
       title="Search & replace with the most popular version"
       aria-label="Search and replace ${escapeHtml(track.name)}"
     >Replace</button>
   `
 }
 
-function trackRow(track: SpotifyTrack, index: number, canEdit: boolean): string {
+function trackRow(row: DisplayRow, index: number, canEdit: boolean): string {
+  const track = row.track
   const artists = track.artists.map((a) => a.name).join(', ')
   const art = renderImg({
     images: track.album.images,
@@ -216,8 +241,10 @@ function trackRow(track: SpotifyTrack, index: number, canEdit: boolean): string 
     sizes: '40px',
   })
 
+  const dupClass = isDuplicateHighlight(track.id) ? ' track-row-duplicate' : ''
+
   return `
-    <div class="track-row">
+    <div class="track-row${dupClass}">
       <span class="track-index">${index + 1}</span>
       <a class="track-open" href="${track.external_urls.spotify}" target="_blank" rel="noreferrer">
         <div class="track-art">
@@ -230,7 +257,7 @@ function trackRow(track: SpotifyTrack, index: number, canEdit: boolean): string 
         </div>
       </a>
       <span class="track-duration">${formatDuration(track.duration_ms)}</span>
-      ${replaceButtonHtml(track, canEdit)}
+      ${replaceButtonHtml(track, row.playlistPosition, canEdit)}
     </div>
   `
 }
@@ -247,10 +274,12 @@ function albumCell(track: SpotifyTrack, index: number): string {
     sizes: `${cellPx}px`,
   })
 
+  const dupClass = isDuplicateHighlight(track.id) ? ' album-cell-duplicate' : ''
+
   return `
     <button
       type="button"
-      class="album-cell"
+      class="album-cell${dupClass}"
       data-track-index="${index}"
       aria-label="${escapeHtml(track.name)} by ${escapeHtml(track.artists.map((a) => a.name).join(', '))}"
     >
@@ -265,7 +294,8 @@ function previewPanel(
   status: 'idle' | 'loading' | 'playing' | 'unavailable' | 'error' = 'idle',
   statusMessage?: string,
   canEdit = false,
-  pinned = false
+  pinned = false,
+  playlistPosition?: number
 ): string {
   if (!track) {
     return `
@@ -326,8 +356,8 @@ function previewPanel(
               : ''
           }
           ${
-            canEdit
-              ? `<button type="button" class="btn-track-replace" data-track-id="${track.id}">Search & replace</button>`
+            canEdit && playlistPosition != null
+              ? `<button type="button" class="btn-track-replace" data-track-id="${track.id}" data-playlist-position="${playlistPosition}">Search & replace</button>`
               : ''
           }
           <a
@@ -339,6 +369,17 @@ function previewPanel(
         </div>
       </div>
     </aside>
+  `
+}
+
+function duplicatesBannerHtml(): string {
+  if (!highlightedDuplicateIds?.size) return ''
+  const count = highlightedDuplicateIds.size
+  return `
+    <div class="dup-highlight-banner" role="status">
+      Highlighting ${count} duplicate track${count === 1 ? '' : 's'}.
+      <button type="button" class="dup-clear-btn" id="clear-duplicates-btn">Clear</button>
+    </div>
   `
 }
 
@@ -408,23 +449,23 @@ function sortMenuHtml(): string {
 }
 
 function tracksSection(
-  tracks: SpotifyTrack[],
+  rows: DisplayRow[],
   activeIndex: number | null,
   canEdit: boolean
 ): string {
-  if (!tracks.length) {
+  if (!rows.length) {
     return '<p class="empty">No tracks in this playlist.</p>'
   }
 
   if (viewMode === 'list') {
     return `
       <div class="track-list">
-        ${tracks.map((t, i) => trackRow(t, i, canEdit)).join('')}
+        ${rows.map((row, i) => trackRow(row, i, canEdit)).join('')}
       </div>
     `
   }
 
-  const activeTrack = activeIndex != null ? tracks[activeIndex] ?? null : null
+  const activeRow = activeIndex != null ? rows[activeIndex] ?? null : null
 
   return `
     <div class="album-grid-layout">
@@ -433,16 +474,16 @@ function tracksSection(
         role="list"
         style="--album-grid-min: ${gridCellSize}px"
       >
-        ${tracks.map((t, i) => albumCell(t, i)).join('')}
+        ${rows.map((row, i) => albumCell(row.track, i)).join('')}
       </div>
-      ${previewPanel(activeTrack, 'idle', undefined, canEdit)}
+      ${previewPanel(activeRow?.track ?? null, 'idle', undefined, canEdit, false, activeRow?.playlistPosition)}
     </div>
   `
 }
 
 function bindGridPreview(
   root: HTMLElement,
-  tracks: SpotifyTrack[],
+  rows: DisplayRow[],
   canEdit: boolean
 ): void {
   let hoverToken = 0
@@ -460,11 +501,12 @@ function bindGridPreview(
     const pinned = index != null && index === pinnedIndex
     if (panel) {
       panel.outerHTML = previewPanel(
-        index != null ? tracks[index] ?? null : null,
+        index != null ? rows[index]?.track ?? null : null,
         status,
         statusMessage,
         canEdit,
-        pinned
+        pinned,
+        index != null ? rows[index]?.playlistPosition : undefined
       )
     }
     root.querySelectorAll('.album-cell').forEach((cell, i) => {
@@ -484,7 +526,7 @@ function bindGridPreview(
     if (pin) pinnedIndex = index
     void (async () => {
       const token = ++hoverToken
-      const track = tracks[index]
+      const track = rows[index]?.track
       if (!track) return
 
       updatePanel(index, 'loading')
@@ -557,11 +599,11 @@ function setSortMenuOpen(root: HTMLElement, open: boolean): void {
 function bindGridSizeControls(
   root: HTMLElement,
   playlist: SpotifyPlaylist,
-  tracks: SpotifyTrack[],
+  entries: PlaylistTrackEntry[],
   kind: PlaylistKind,
   market: string,
   onBack: () => void,
-  onTracksUpdated?: (tracks: SpotifyTrack[]) => void
+  onTracksUpdated?: (entries: PlaylistTrackEntry[]) => void
 ): void {
   const dec = root.querySelector<HTMLButtonElement>('#grid-size-dec')
   const inc = root.querySelector<HTMLButtonElement>('#grid-size-inc')
@@ -575,7 +617,7 @@ function bindGridSizeControls(
     if (next === gridCellSize) return
     gridCellSize = next
     localStorage.setItem(GRID_SIZE_STORAGE_KEY, String(gridCellSize))
-    renderPlaylistDetail(root, playlist, tracks, kind, market, onBack, onTracksUpdated)
+    renderPlaylistDetail(root, playlist, entries, kind, market, onBack, onTracksUpdated)
   }
 
   dec.addEventListener('click', () => apply(-GRID_SIZE_STEP))
@@ -585,11 +627,11 @@ function bindGridSizeControls(
 function bindSortMenu(
   root: HTMLElement,
   playlist: SpotifyPlaylist,
-  originalTracks: SpotifyTrack[],
+  entries: PlaylistTrackEntry[],
   kind: PlaylistKind,
   market: string,
   onBack: () => void,
-  onTracksUpdated?: (tracks: SpotifyTrack[]) => void
+  onTracksUpdated?: (entries: PlaylistTrackEntry[]) => void
 ): void {
   const trigger = root.querySelector<HTMLButtonElement>('#sort-trigger')
   const menu = root.querySelector<HTMLElement>('.detail-sort-menu')
@@ -626,7 +668,7 @@ function bindSortMenu(
           renderPlaylistDetail(
             root,
             playlist,
-            originalTracks,
+            entries,
             kind,
             market,
             onBack,
@@ -634,7 +676,7 @@ function bindSortMenu(
           )
           try {
             audioFeaturesById = await getAudioFeatures(
-              originalTracks.map((t) => t.id)
+              entries.map((e) => e.track.id)
             )
           } finally {
             audioFeaturesLoading = false
@@ -645,7 +687,7 @@ function bindSortMenu(
         renderPlaylistDetail(
           root,
           playlist,
-          originalTracks,
+          entries,
           kind,
           market,
           onBack,
@@ -680,6 +722,88 @@ function showDetailNotice(root: HTMLElement, message: string, isError = false): 
   }, 6000)
 }
 
+function bindDetectDuplicates(root: HTMLElement): void {
+  if (duplicateClickBound) return
+  duplicateClickBound = true
+
+  root.addEventListener('click', (e) => {
+    const ctx = detailReplaceCtx
+    if (!ctx) return
+
+    const clearBtn = (e.target as HTMLElement).closest('#clear-duplicates-btn')
+    if (clearBtn) {
+      e.preventDefault()
+      highlightedDuplicateIds = null
+      renderPlaylistDetail(
+        root,
+        ctx.playlist,
+        ctx.entries,
+        ctx.kind,
+        ctx.market,
+        ctx.onBack,
+        ctx.onTracksUpdated
+      )
+      return
+    }
+
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(
+      '#detect-duplicates-btn'
+    )
+    if (!btn) return
+    e.preventDefault()
+
+    runDuplicateDetectFlow({
+      playlistId: ctx.playlist.id,
+      market: ctx.market,
+      canEdit: ctx.canEdit,
+      onFound: (groups, ids) => {
+        highlightedDuplicateIds = ids
+        renderPlaylistDetail(
+          root,
+          ctx.playlist,
+          ctx.entries,
+          ctx.kind,
+          ctx.market,
+          ctx.onBack,
+          ctx.onTracksUpdated
+        )
+        showDetailNotice(
+          root,
+          `Found ${groups.length} duplicate song${groups.length === 1 ? '' : 's'} (${ids.size} tracks).`
+        )
+      },
+      onNone: () => {
+        highlightedDuplicateIds = null
+        renderPlaylistDetail(
+          root,
+          ctx.playlist,
+          ctx.entries,
+          ctx.kind,
+          ctx.market,
+          ctx.onBack,
+          ctx.onTracksUpdated
+        )
+      },
+      onRemoveUpdate: (updatedEntries, groups) => {
+        setCachedEntries(ctx.playlist.id, ctx.market, updatedEntries)
+        ctx.onTracksUpdated?.(updatedEntries)
+        highlightedDuplicateIds = groups.length ? duplicateTrackIds(groups) : null
+        renderPlaylistDetail(
+          root,
+          ctx.playlist,
+          updatedEntries,
+          ctx.kind,
+          ctx.market,
+          ctx.onBack,
+          ctx.onTracksUpdated
+        )
+        showDetailNotice(root, `Removed track from “${ctx.playlist.name}”.`)
+      },
+      onError: (msg) => showDetailNotice(root, msg, true),
+    })
+  })
+}
+
 function bindTrackReplace(root: HTMLElement): void {
   if (replaceClickBound) return
   replaceClickBound = true
@@ -688,27 +812,58 @@ function bindTrackReplace(root: HTMLElement): void {
     const ctx = detailReplaceCtx
     if (!ctx?.canEdit) return
 
-    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('.btn-track-replace')
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(
+      '.btn-track-replace[data-playlist-position][data-track-id]'
+    )
     if (!btn) return
     e.preventDefault()
     e.stopPropagation()
 
     const trackId = btn.dataset.trackId
-    if (!trackId) return
+    const playlistPosition = Number(btn.dataset.playlistPosition)
+    if (!trackId || Number.isNaN(playlistPosition)) {
+      if (isPlaylistDebugEnabled()) {
+        playlistDebugWarn('Replace clicked: missing trackId or playlistPosition', {
+          trackId,
+          playlistPosition: btn.dataset.playlistPosition,
+          dataset: { ...btn.dataset },
+        })
+      }
+      return
+    }
 
-    const position = ctx.tracks.findIndex((t) => t.id === trackId)
-    const track = ctx.tracks[position]
-    if (!track || position < 0) return
+    const entryIndex = ctx.entries.findIndex((e) => e.position === playlistPosition)
+    const entry = ctx.entries[entryIndex]
+    if (!entry || entry.track.id !== trackId) {
+      playlistDebugWarn('Replace clicked: entry lookup failed', {
+        playlistPosition,
+        displayNumber: playlistPosition + 1,
+        trackId,
+        entryIndex,
+        foundId: entry?.track.id ?? null,
+        foundName: entry?.track.name ?? null,
+        cachedEntryCount: ctx.entries.length,
+      })
+      return
+    }
+
+    playlistDebug('Replace clicked', {
+      playlistId: ctx.playlist.id,
+      playlistPosition,
+      displayNumber: playlistPosition + 1,
+      name: entry.track.name,
+      trackId,
+    })
 
     void runTrackReplaceFlow({
       playlistId: ctx.playlist.id,
-      track,
-      position,
+      track: entry.track,
+      playlistPosition,
       market: ctx.market,
       onSuccess: (candidate) => {
-        const updated = [...ctx.tracks]
-        updated[position] = candidate
-        setCachedTracks(ctx.playlist.id, ctx.market, updated)
+        const updated = [...ctx.entries]
+        updated[entryIndex] = { ...entry, track: candidate }
+        setCachedEntries(ctx.playlist.id, ctx.market, updated)
         ctx.onTracksUpdated?.(updated)
         showDetailNotice(root, `Replaced with “${candidate.name}” (pop ${candidate.popularity ?? '—'})`)
         renderPlaylistDetail(
@@ -729,11 +884,11 @@ function bindTrackReplace(root: HTMLElement): void {
 export function renderPlaylistDetail(
   root: HTMLElement,
   playlist: SpotifyPlaylist,
-  tracks: SpotifyTrack[],
+  entries: PlaylistTrackEntry[],
   kind: PlaylistKind,
   market: string,
   onBack: () => void,
-  onTracksUpdated?: (tracks: SpotifyTrack[]) => void
+  onTracksUpdated?: (entries: PlaylistTrackEntry[]) => void
 ): void {
   stopPreview()
   resetSortState(playlist.id)
@@ -741,14 +896,18 @@ export function renderPlaylistDetail(
   const canEdit = kind !== 'followed'
   detailReplaceCtx = {
     playlist,
-    tracks,
+    entries,
     kind,
     market,
     canEdit,
     onBack,
     onTracksUpdated,
   }
-  const displayTracks = sortTracks(tracks, sortMode, audioFeaturesById)
+  const displayRows = sortPlaylistRows(
+    entries.map((e) => ({ track: e.track, playlistPosition: e.position })),
+    sortMode,
+    audioFeaturesById
+  )
 
   const cover = renderImg({
     images: playlist.images,
@@ -774,7 +933,7 @@ export function renderPlaylistDetail(
           <span class="badge badge-${kind}">${formatKind(kind)}</span>
           <h1>${escapeHtml(playlist.name)}</h1>
           <p class="detail-sub">
-            ${escapeHtml(owner)} · ${displayTracks.length} track${displayTracks.length === 1 ? '' : 's'}
+            ${escapeHtml(owner)} · ${displayRows.length} track${displayRows.length === 1 ? '' : 's'}
           </p>
           ${
             playlist.description
@@ -809,11 +968,18 @@ export function renderPlaylistDetail(
             >Grid</button>
           </div>
           <div class="detail-toolbar-actions">
+            <button
+              type="button"
+              class="btn-detect-duplicates"
+              id="detect-duplicates-btn"
+              title="Find remixes, deluxe, live, and remastered versions of the same song"
+            >Detect duplicates</button>
             ${gridSizeControlsHtml()}
             ${sortMenuHtml()}
           </div>
         </div>
-        ${tracksSection(displayTracks, null, canEdit)}
+        ${duplicatesBannerHtml()}
+        ${tracksSection(displayRows, null, canEdit)}
       </div>
     </div>
   `
@@ -829,15 +995,16 @@ export function renderPlaylistDetail(
       if (mode === viewMode) return
       if (mode === 'grid') unlockPreviewAudio()
       viewMode = mode
-      renderPlaylistDetail(root, playlist, tracks, kind, market, onBack, onTracksUpdated)
+      renderPlaylistDetail(root, playlist, entries, kind, market, onBack, onTracksUpdated)
     })
   })
 
-  bindSortMenu(root, playlist, tracks, kind, market, onBack, onTracksUpdated)
-  bindGridSizeControls(root, playlist, tracks, kind, market, onBack, onTracksUpdated)
+  bindSortMenu(root, playlist, entries, kind, market, onBack, onTracksUpdated)
+  bindGridSizeControls(root, playlist, entries, kind, market, onBack, onTracksUpdated)
+  bindDetectDuplicates(root)
   bindTrackReplace(root)
 
-  if (viewMode === 'grid' && displayTracks.length) {
-    bindGridPreview(root, displayTracks, canEdit)
+  if (viewMode === 'grid' && displayRows.length) {
+    bindGridPreview(root, displayRows, canEdit)
   }
 }

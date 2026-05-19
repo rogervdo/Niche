@@ -1,5 +1,7 @@
 import { playPreview, stopPreview, unlockPreviewAudio } from './previewPlayer'
 import { IMAGE_SIZES, renderImg } from '../spotify/images'
+import { spotifyErrorMessage } from '../spotify/api'
+import { playlistDebug } from '../spotify/playlistDebug'
 import { lookupBetterVersion, replaceTrackAtPosition } from '../spotify/playlistEdit'
 import { resolvePreviewUrl } from '../spotify/preview'
 import type { SpotifyTrack } from '../spotify/types'
@@ -110,12 +112,13 @@ function showModal(html: string): { close: () => void; overlay: HTMLElement } {
 export async function runTrackReplaceFlow(opts: {
   playlistId: string
   track: SpotifyTrack
-  position: number
+  /** 0-based index in the full Spotify playlist (includes unavailable rows). */
+  playlistPosition: number
   market: string
   onSuccess: (newTrack: SpotifyTrack) => void
   onError: (message: string) => void
 }): Promise<void> {
-  const { playlistId, track, position, market, onSuccess, onError } = opts
+  const { playlistId, track, playlistPosition, market, onSuccess, onError } = opts
 
   let closeModal = () => {}
 
@@ -148,7 +151,7 @@ export async function runTrackReplaceFlow(opts: {
     lookup = await lookupBetterVersion(track, market)
   } catch (e) {
     closeModal()
-    onError(e instanceof Error ? e.message : 'Search failed')
+    onError(spotifyErrorMessage(e))
     return
   }
 
@@ -233,17 +236,24 @@ export async function runTrackReplaceFlow(opts: {
       confirmBtn.textContent = 'Replacing…'
 
       try {
+        playlistDebug('replace modal: confirming', {
+          playlistId,
+          playlistPosition,
+          from: track.name,
+          to: candidate.name,
+        })
         await replaceTrackAtPosition(
           playlistId,
-          position,
+          playlistPosition,
           track.id,
-          candidate.id
+          candidate.id,
+          market
         )
         closeModal()
         onSuccess(candidate)
       } catch (e) {
         closeModal()
-        onError(e instanceof Error ? e.message : 'Could not replace track')
+        onError(spotifyErrorMessage(e))
       }
     })()
   })

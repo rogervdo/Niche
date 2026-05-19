@@ -3,11 +3,13 @@ import {
   getAccessToken,
   isInsufficientScopeMessage,
 } from './auth'
+import { playlistDebug } from './playlistDebug'
 import type {
   AudioFeatures,
   PlaylistTracksPage,
   PlaylistsPage,
   SearchTracksResponse,
+  PlaylistTrackEntry,
   SpotifyPlaylist,
   SpotifyTrack,
   SpotifyUser,
@@ -23,17 +25,36 @@ function parseSpotifyError(status: number, body: unknown): string {
     error?: { message?: string; status?: number }
     error_description?: string
   }
-  const message =
+  const raw =
     err.error?.message ??
     err.error_description ??
-    (typeof err.error === 'string' ? err.error : null) ??
-    `Spotify API error (${status})`
+    (typeof err.error === 'string' ? err.error : null)
+
+  let message = raw ?? `Spotify API error (${status})`
+
+  if (status === 429) {
+    message =
+      raw && /rate|limit|too many/i.test(raw)
+        ? raw
+        : 'Spotify API rate limit exceeded. Please wait a minute and try again.'
+  } else if (status === 403 && !raw) {
+    message =
+      'Spotify denied this request. You may not have permission to edit this playlist.'
+  } else if (status >= 500 && !raw) {
+    message = 'Spotify is temporarily unavailable. Please try again shortly.'
+  }
 
   if (isInsufficientScopeMessage(message)) {
     clearAuth()
     return SCOPE_ERROR
   }
   return message
+}
+
+/** User-facing message from a failed Spotify API call. */
+export function spotifyErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message
+  return String(err)
 }
 
 export async function spotifyFetch<T>(path: string): Promise<T> {
@@ -54,7 +75,10 @@ export async function spotifyFetch<T>(path: string): Promise<T> {
   return res.json() as Promise<T>
 }
 
-export async function spotifyPut(path: string, body: unknown): Promise<void> {
+export async function spotifyPut<T = { snapshot_id?: string }>(
+  path: string,
+  body: unknown
+): Promise<T | undefined> {
   const token = await getAccessToken()
   const res = await fetch(`${API_ROOT}${path}`, {
     method: 'PUT',
@@ -72,6 +96,10 @@ export async function spotifyPut(path: string, body: unknown): Promise<void> {
     const err = await res.json().catch(() => ({}))
     throw new Error(parseSpotifyError(res.status, err))
   }
+
+  const text = await res.text()
+  if (!text) return undefined
+  return JSON.parse(text) as T
 }
 
 export async function spotifyPost<T>(path: string, body: unknown): Promise<T> {
@@ -96,7 +124,10 @@ export async function spotifyPost<T>(path: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>
 }
 
-export async function spotifyDelete(path: string, body: unknown): Promise<void> {
+export async function spotifyDelete<T = { snapshot_id?: string }>(
+  path: string,
+  body: unknown
+): Promise<T | undefined> {
   const token = await getAccessToken()
   const res = await fetch(`${API_ROOT}${path}`, {
     method: 'DELETE',
@@ -114,6 +145,10 @@ export async function spotifyDelete(path: string, body: unknown): Promise<void> 
     const err = await res.json().catch(() => ({}))
     throw new Error(parseSpotifyError(res.status, err))
   }
+
+  const text = await res.text()
+  if (!text) return undefined
+  return JSON.parse(text) as T
 }
 
 /** Search tracks via Spotify field filters (e.g. track:"…" artist:"…"). */
@@ -151,28 +186,81 @@ export async function getAllPlaylists(): Promise<SpotifyPlaylist[]> {
   return all
 }
 
-/** All tracks in a playlist (paginated). Skips removed/unavailable entries. */
-export async function getPlaylistTracks(
+/** URI Spotify expects when removing this playlist row (may differ from track.uri). */
+function removeUriForPlaylistRow(
+  track: SpotifyTrack,
+  isLocal: boolean | undefined
+): string | null {
+  if (isLocal) return null
+  if (track.linked_from?.uri) return track.linked_from.uri
+  if (track.uri) return track.uri
+  return track.id ? `spotify:track:${track.id}` : null
+}
+
+/** All playlist rows with position and URI (for accurate remove). */
+export async function getPlaylistTrackEntries(
   playlistId: string,
   market?: string
-): Promise<SpotifyTrack[]> {
-  const all: SpotifyTrack[] = []
+): Promise<PlaylistTrackEntry[]> {
+  const entries: PlaylistTrackEntry[] = []
   const marketParam = market ? `&market=${encodeURIComponent(market)}` : ''
-  let url: string | null = `/playlists/${playlistId}/tracks?limit=50${marketParam}`
+  let url: string | null = `/playlists/${playlistId}/items?limit=50${marketParam}`
+  let position = 0
+  let spotifyTotal = 0
+  let linkedFromCount = 0
 
   while (url) {
     const path = url.startsWith('http')
       ? url.replace('https://api.spotify.com/v1', '')
       : url
     const page: PlaylistTracksPage = await spotifyFetch<PlaylistTracksPage>(path)
-    const items = page.items ?? []
-    for (const item of items) {
-      if (item?.track?.id) all.push(item.track)
+    spotifyTotal = page.total ?? spotifyTotal
+    for (const item of page.items ?? []) {
+      if (!item) {
+        position++
+        continue
+      }
+      const track = item.track ?? item.item ?? null
+      const uri = track?.id ? removeUriForPlaylistRow(track, item.is_local) : null
+      if (track?.id && uri) {
+        if (
+          track.linked_from?.uri &&
+          track.uri &&
+          track.linked_from.uri !== track.uri
+        ) {
+          linkedFromCount++
+        }
+        entries.push({ position, uri, track })
+      }
+      position++
     }
     url = page.next ? page.next.replace('https://api.spotify.com/v1', '') : null
   }
 
-  return all
+  const lastPosition = entries.length ? entries[entries.length - 1]!.position : -1
+  const skippedSlots =
+    entries.length > 0 ? lastPosition + 1 - entries.length : 0
+
+  playlistDebug('getPlaylistTrackEntries', {
+    playlistId,
+    playableCount: entries.length,
+    spotifyTotal,
+    lastPlaylistPosition: lastPosition,
+    skippedSlots,
+    totalMinusPlayable: spotifyTotal - entries.length,
+    linkedFromCount,
+  })
+
+  return entries
+}
+
+/** All tracks in a playlist (paginated). Skips removed/unavailable entries. */
+export async function getPlaylistTracks(
+  playlistId: string,
+  market?: string
+): Promise<SpotifyTrack[]> {
+  const entries = await getPlaylistTrackEntries(playlistId, market)
+  return entries.map((e) => e.track)
 }
 
 type AudioFeaturesResponse = {

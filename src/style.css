@@ -1189,6 +1189,149 @@ code {
   color: var(--error);
 }
 
+.btn-detect-duplicates {
+  border-radius: 999px;
+  padding: 0.45rem 0.85rem;
+}
+
+.dup-highlight-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin: -0.5rem 0 1rem;
+  padding: 0.55rem 0.85rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  background: color-mix(in srgb, var(--warn) 14%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--border));
+}
+
+.dup-clear-btn {
+  appearance: none;
+  border: none;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.track-row-duplicate {
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  border-radius: 8px;
+}
+
+.track-row-duplicate .track-name {
+  color: var(--warn);
+}
+
+.album-cell-duplicate {
+  border-color: var(--warn) !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--warn) 50%, transparent);
+}
+
+.replace-modal-dupes {
+  width: min(780px, 100%);
+}
+
+.dup-modal-error {
+  margin: 0 0 1rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  background: color-mix(in srgb, var(--error) 12%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--error) 40%, var(--border));
+  color: var(--error);
+}
+
+.dup-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  max-height: min(55vh, 480px);
+  overflow-y: auto;
+  margin-bottom: 1rem;
+  padding-right: 0.25rem;
+}
+
+.dup-group-hint {
+  margin-top: 0.25rem;
+}
+
+.dup-group-tracks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  margin-top: 0.5rem;
+}
+
+.dup-compare-track {
+  padding: 0.5rem;
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.dup-compare-track .replace-compare-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.dup-track-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.35rem;
+  flex-shrink: 0;
+  min-width: 4.5rem;
+}
+
+.dup-entry-distinction {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.dup-open-link {
+  flex-shrink: 0;
+  align-self: center;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.dup-open-link:hover {
+  text-decoration: underline;
+}
+
+.btn-dup-remove {
+  appearance: none;
+  padding: 0.3rem 0.55rem;
+  border: 1px solid color-mix(in srgb, var(--error) 45%, var(--border));
+  border-radius: 6px;
+  background: transparent;
+  color: var(--error);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn-dup-remove:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--error) 12%, var(--surface));
+}
+
+.btn-dup-remove:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 .replace-modal-overlay {
   position: fixed;
   inset: 0;
