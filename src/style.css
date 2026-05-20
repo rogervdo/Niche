@@ -1415,6 +1415,7 @@ code {
 }
 
 .album-grid-entry {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 0.375rem;
@@ -1424,10 +1425,16 @@ code {
   box-sizing: border-box;
 }
 
-.album-grid-entry.has-sep-before {
-  padding-left: 0.625rem;
-  margin-left: 0.125rem;
-  border-left: 1px solid var(--border);
+/* Separator in the flex gap — no padding, so toggling it cannot reflow the row. */
+.album-grid-entry.has-sep-before::before {
+  content: '';
+  position: absolute;
+  left: calc(-0.5rem / 2 - 0.5px);
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: color-mix(in srgb, var(--border) 88%, var(--text));
+  pointer-events: none;
 }
 
 .album-grid-label {
@@ -1519,14 +1526,161 @@ code {
   opacity: 0.35;
 }
 
-.album-preview-panel {
+.album-preview-column {
   position: sticky;
   top: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.preview-settings-anchor {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 200;
+}
+
+.btn-preview-settings {
+  display: grid;
+  place-items: center;
+  width: auto;
+  height: auto;
+  padding: 0.2rem;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0.85;
+}
+
+.btn-preview-settings:hover,
+.btn-preview-settings.is-active {
+  color: var(--accent);
+  opacity: 1;
+}
+
+.preview-settings-popup {
+  display: none;
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  width: min(17.5rem, calc(100vw - 2rem));
+  max-height: min(70vh, 28rem);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 12px 32px #000a;
+}
+
+.preview-settings-popup.is-open {
+  display: block;
+}
+
+.preview-settings-popup-inner {
+  padding: 1rem 1.1rem;
+  font-size: 0.8rem;
+}
+
+.preview-settings-heading {
+  margin: 0 0 0.85rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.preview-settings-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+}
+
+.preview-settings-section {
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.preview-settings-section:not(:last-child) {
+  padding-bottom: 1.1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.preview-settings-section-title {
+  margin: 0 0 0.25rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.preview-settings-section-desc {
+  margin: 0 0 0.75rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.album-preview-panel {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 1.25rem;
   min-height: 360px;
+}
+
+.preview-settings-row {
+  margin-bottom: 0.85rem;
+}
+
+.preview-settings-row:last-of-type {
+  margin-bottom: 0.65rem;
+}
+
+.preview-settings-row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.preview-settings-label {
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+
+.preview-settings-value {
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  font-size: 0.82rem;
+}
+
+.preview-settings-slider {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.preview-settings-hint {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.preview-settings-reset {
+  width: 100%;
+  margin-top: 0.25rem;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.preview-settings-reset:hover {
+  border-color: var(--accent);
 }
 
 .album-preview-panel-empty {
@@ -1550,13 +1704,40 @@ code {
   line-height: 1.4;
 }
 
+.preview-art-wrap {
+  position: relative;
+  margin-bottom: 1rem;
+}
+
 .preview-art {
   aspect-ratio: 1;
   border-radius: 8px;
   overflow: hidden;
   background: var(--surface-2);
-  margin-bottom: 1rem;
   box-shadow: 0 12px 32px #0008;
+}
+
+.preview-status-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin: 0 0 1rem;
+  min-height: 1.25rem;
+}
+
+.preview-status-row .preview-status {
+  margin: 0;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.preview-visualizer {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  height: 18px;
+  background: transparent;
 }
 
 .preview-art img {
@@ -2105,9 +2286,17 @@ code {
     grid-template-columns: 1fr;
   }
 
-  .album-preview-panel {
+  .album-preview-column {
     position: static;
     order: -1;
+  }
+
+  .preview-settings-anchor {
+    top: 0.75rem;
+    right: 0.75rem;
+  }
+
+  .album-preview-panel {
     min-height: auto;
   }
 

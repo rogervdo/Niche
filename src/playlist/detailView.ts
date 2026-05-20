@@ -9,6 +9,11 @@ import { getAudioFeatures, spotifyErrorMessage, type PlaylistKind } from '../spo
 import { setCachedEntries } from '../spotify/playlistCache'
 import { isPlaylistDebugEnabled, playlistDebug, playlistDebugWarn } from '../spotify/playlistDebug'
 import { playPreview, stopPreview, unlockPreviewAudio, getPreviewError } from './previewPlayer'
+import { startPreviewVisualizer, stopPreviewVisualizer } from './previewVisualizer'
+import {
+  bindPreviewSettings,
+  previewSettingsControlsHtml,
+} from './gridPreviewSettings'
 import { resolvePreviewUrl } from '../spotify/preview'
 import { runTrackReplaceFlow } from './trackReplace'
 import { runDuplicateDetectFlow } from './detectDuplicates'
@@ -732,16 +737,30 @@ function previewPanel(
     statusClass = 'preview-status-error'
   }
 
+  const visualizerHtml =
+    status === 'playing'
+      ? `<canvas class="preview-visualizer" aria-hidden="true"></canvas>`
+      : ''
+
+  const statusRowHtml = visualizerHtml
+    ? `<div class="preview-status-row">
+        <p class="preview-status ${statusClass}">${escapeHtml(statusText)}</p>
+        ${visualizerHtml}
+      </div>`
+    : `<p class="preview-status ${statusClass}">${escapeHtml(statusText)}</p>`
+
   return `
     <aside class="album-preview-panel">
-      <div class="preview-art">
-        ${art || `<span class="card-placeholder">♪</span>`}
+      <div class="preview-art-wrap">
+        <div class="preview-art">
+          ${art || `<span class="card-placeholder">♪</span>`}
+        </div>
       </div>
       <div class="preview-meta">
         <h2 class="preview-track-name">${escapeHtml(track.name)}</h2>
         <p class="preview-artists">${escapeHtml(artists)}</p>
         <p class="preview-album">${escapeHtml(track.album.name)}${year ? ` · ${escapeHtml(year)}` : ''} · ${formatDuration(track.duration_ms)}</p>
-        <p class="preview-status ${statusClass}">${escapeHtml(statusText)}</p>
+        ${statusRowHtml}
         ${
           track.popularity != null
             ? `<p class="preview-popularity">Popularity ${track.popularity}</p>`
@@ -944,7 +963,7 @@ function syncGroupedGridSeparators(grid: HTMLElement): void {
   entries.forEach((entry, i) => {
     const prev = entries[i - 1]
     const sameRow =
-      prev != null && Math.abs(prev.offsetTop - entry.offsetTop) < 2
+      prev != null && Math.abs(prev.offsetTop - entry.offsetTop) < 4
     entry.classList.toggle('has-sep-before', sameRow)
   })
 }
@@ -1019,7 +1038,9 @@ function tracksSection(
       >
         ${gridBody}
       </div>
-      ${previewPanel(activeRow?.track ?? null, 'idle', undefined, canEdit, false, activeRow?.playlistPosition)}
+      <div class="album-preview-column">
+        ${previewPanel(activeRow?.track ?? null, 'idle', undefined, canEdit, false, activeRow?.playlistPosition)}
+      </div>
     </div>
   `
 }
@@ -1062,6 +1083,15 @@ function bindGridPreview(
   let pinnedIndex: number | null = null
   let activeIndex: number | null = null
 
+  const syncVisualizer = (status: 'idle' | 'loading' | 'playing' | 'unavailable' | 'error'): void => {
+    if (status !== 'playing') {
+      stopPreviewVisualizer()
+      return
+    }
+    const canvas = root.querySelector<HTMLCanvasElement>('.preview-visualizer')
+    if (canvas) startPreviewVisualizer(canvas)
+  }
+
   const updatePanel = (
     index: number | null,
     status: 'idle' | 'loading' | 'playing' | 'unavailable' | 'error' = 'idle',
@@ -1082,6 +1112,7 @@ function bindGridPreview(
         index != null ? rows[index]?.playlistPosition : undefined
       )
     }
+    syncVisualizer(status)
     root.querySelectorAll<HTMLElement>('.album-cell').forEach((cell) => {
       const cellIndex = Number(cell.dataset.trackIndex)
       if (Number.isNaN(cellIndex)) return
@@ -1125,6 +1156,8 @@ function bindGridPreview(
 
       if (!ok) {
         updatePanel(index, 'error', getPreviewError() ?? 'Could not play preview')
+      } else {
+        syncVisualizer('playing')
       }
     })()
   }
@@ -1697,6 +1730,7 @@ export function renderPlaylistDetail(
 
   root.innerHTML = `
     <div class="shell detail-shell ${viewMode === 'grid' ? 'detail-shell-grid' : ''}">
+      ${viewMode === 'grid' ? previewSettingsControlsHtml() : ''}
       <button type="button" class="btn-back" id="back-btn">← Back to playlists</button>
 
       <header class="detail-header">
@@ -1795,6 +1829,7 @@ export function renderPlaylistDetail(
       groupedGridSepObserver = null
     }
     bindGridPreview(root, displayRows, canEdit)
+    bindPreviewSettings(root)
   } else {
     groupedGridSepObserver?.disconnect()
     groupedGridSepObserver = null

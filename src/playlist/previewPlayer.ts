@@ -1,3 +1,5 @@
+import { tuningToAnalyser } from './previewVisualizerTuning'
+
 const PREVIEW_DURATION_MS = 20_000
 
 const audioBlobUrlBySource = new Map<string, string>()
@@ -7,6 +9,60 @@ let audioEl: HTMLAudioElement | null = null
 let stopTimer: ReturnType<typeof setTimeout> | null = null
 let unlocked = false
 let lastError: string | null = null
+
+let audioContext: AudioContext | null = null
+let analyserNode: AnalyserNode | null = null
+let mediaSource: MediaElementAudioSourceNode | null = null
+
+const previewStopListeners = new Set<() => void>()
+
+export function onPreviewStop(listener: () => void): () => void {
+  previewStopListeners.add(listener)
+  return () => previewStopListeners.delete(listener)
+}
+
+function notifyPreviewStop(): void {
+  for (const listener of previewStopListeners) listener()
+}
+
+function ensureAnalyser(audio: HTMLAudioElement): AnalyserNode | null {
+  try {
+    if (!audioContext) {
+      audioContext = new AudioContext()
+    }
+    if (!mediaSource) {
+      mediaSource = audioContext.createMediaElementSource(audio)
+      analyserNode = audioContext.createAnalyser()
+      applyPreviewAnalyserTuning()
+      mediaSource.connect(analyserNode)
+      analyserNode.connect(audioContext.destination)
+    }
+    if (audioContext.state === 'suspended') {
+      void audioContext.resume()
+    }
+    return analyserNode
+  } catch {
+    return null
+  }
+}
+
+export function getPreviewAnalyser(): AnalyserNode | null {
+  return analyserNode
+}
+
+export function applyPreviewAnalyserTuning(): void {
+  if (!analyserNode) return
+  const { minDecibels, maxDecibels, smoothingTimeConstant, fftSize } =
+    tuningToAnalyser()
+  analyserNode.minDecibels = minDecibels
+  analyserNode.maxDecibels = maxDecibels
+  analyserNode.smoothingTimeConstant = smoothingTimeConstant
+  analyserNode.fftSize = fftSize
+}
+
+export function isPreviewPlaying(): boolean {
+  return Boolean(audioEl && !audioEl.paused && !audioEl.ended && audioEl.currentTime > 0)
+}
 
 function ensureAudio(): HTMLAudioElement {
   if (!audioEl) {
@@ -72,6 +128,7 @@ export function stopPreview(): void {
     audioEl.load()
   }
   lastError = null
+  notifyPreviewStop()
 }
 
 export async function playPreview(previewUrl: string): Promise<boolean> {
@@ -115,6 +172,7 @@ export async function playPreview(previewUrl: string): Promise<boolean> {
       })
     }
 
+    ensureAnalyser(audio)
     await audio.play()
     stopTimer = setTimeout(() => stopPreview(), PREVIEW_DURATION_MS)
     return true
