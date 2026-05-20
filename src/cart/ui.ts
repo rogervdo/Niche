@@ -6,6 +6,7 @@ import {
   addToCart,
   clearCart,
   getCartCount,
+  getCartTrackIds,
   getCartTracks,
   getCartUris,
   isInCart,
@@ -19,7 +20,15 @@ import { mountCartGlass, unmountCartGlass } from './glass'
 export const NICHE_TRACK_DRAG_TYPE = 'application/x-niche-track-id'
 
 const CART_COLLAPSED_KEY = 'niche_cart_collapsed'
-import { appendTracksToPlaylist, createUserPlaylist } from './playlistActions'
+const ALSO_LIKED_KEY = 'niche_cart_also_liked'
+import { appendTracksToPlaylist, createUserPlaylist, saveTracksToLiked } from './playlistActions'
+import {
+  bindPlaylistSearch,
+  bindRecentPlaylists,
+  filterRecentPlaylists,
+  recentPlaylistsHtml,
+} from '../playlist/playlistPickerUi'
+import { loadRecent, pushRecentPlaylist } from '../playlist/recentActivity'
 
 function escapeHtml(text: string): string {
   const el = document.createElement('div')
@@ -140,6 +149,36 @@ function showModal(html: string): void {
   modalEl = overlay
 }
 
+
+function alsoLikedChecked(): boolean {
+  return localStorage.getItem(ALSO_LIKED_KEY) === 'true'
+}
+
+function setAlsoLikedChecked(checked: boolean): void {
+  localStorage.setItem(ALSO_LIKED_KEY, String(checked))
+}
+
+function alsoLikedCheckboxHtml(checked = alsoLikedChecked()): string {
+  return `
+    <label class="cart-form-checkbox">
+      <input type="checkbox" id="cart-also-liked" ${checked ? 'checked' : ''} />
+      Also add to Liked Songs
+    </label>
+  `
+}
+
+function bindAlsoLikedCheckbox(overlay: HTMLElement): HTMLInputElement | null {
+  const input = overlay.querySelector<HTMLInputElement>('#cart-also-liked')
+  if (!input) return null
+  input.addEventListener('change', () => setAlsoLikedChecked(input.checked))
+  return input
+}
+
+async function addCartTracksToLiked(): Promise<void> {
+  const ids = getCartTrackIds()
+  if (!ids.length) return
+  await saveTracksToLiked(ids)
+}
 
 function cartTrackRow(track: import('../spotify/types').SpotifyTrack): string {
   const artists = track.artists.map((a) => a.name).join(', ')
@@ -316,6 +355,7 @@ function openCreateModal(): void {
         Playlist name
         <input type="text" class="cart-form-input" id="cart-new-name" value="From Niche cart" maxlength="100" />
       </label>
+      ${alsoLikedCheckboxHtml()}
       <p class="cart-form-error" id="cart-form-error" hidden></p>
       <div class="replace-modal-actions">
         <button type="button" class="btn-replace-cancel" data-cart-close>Cancel</button>
@@ -328,6 +368,7 @@ function openCreateModal(): void {
   const nameInput = overlay.querySelector<HTMLInputElement>('#cart-new-name')!
   const errorEl = overlay.querySelector<HTMLElement>('#cart-form-error')!
   const submitBtn = overlay.querySelector<HTMLButtonElement>('#cart-create-submit')!
+  const alsoLikedInput = bindAlsoLikedCheckbox(overlay)
 
   overlay.querySelector('[data-cart-close]')?.addEventListener('click', closeModal)
 
@@ -346,8 +387,10 @@ function openCreateModal(): void {
 
       try {
         const uris = getCartUris()
+        const alsoLiked = alsoLikedInput?.checked ?? false
         const playlist = await createUserPlaylist(ctx!.userId, name)
         await appendTracksToPlaylist(playlist.id, uris)
+        if (alsoLiked) await addCartTracksToLiked()
         upsertCachedPlaylist(
           {
             ...playlist,
@@ -419,6 +462,9 @@ function openAddToPlaylistModal(): void {
     return
   }
 
+  const allowedIds = new Set(playlists.map((p) => p.id))
+  const recentItems = filterRecentPlaylists(loadRecent(ctx.userId), allowedIds)
+
   showModal(`
     <div class="replace-modal cart-modal cart-modal-wide" role="dialog" aria-labelledby="cart-add-title">
       <h2 class="replace-modal-title" id="cart-add-title">Add to playlist</h2>
@@ -430,9 +476,11 @@ function openAddToPlaylistModal(): void {
         placeholder="Search your playlists…"
         autocomplete="off"
       />
+      ${recentPlaylistsHtml(recentItems)}
       <div class="cart-playlist-picks" id="cart-playlist-picks">
         ${playlists.map(playlistPickerRow).join('')}
       </div>
+      ${alsoLikedCheckboxHtml()}
       <p class="cart-form-error" id="cart-form-error" hidden></p>
       <div class="replace-modal-actions">
         <button type="button" class="btn-replace-cancel" data-cart-close>Cancel</button>
@@ -444,58 +492,60 @@ function openAddToPlaylistModal(): void {
   const errorEl = overlay.querySelector<HTMLElement>('#cart-form-error')!
   const picksEl = overlay.querySelector<HTMLElement>('#cart-playlist-picks')!
   const searchInput = overlay.querySelector<HTMLInputElement>('#cart-playlist-search')!
+  const alsoLikedInput = bindAlsoLikedCheckbox(overlay)
 
   overlay.querySelector('[data-cart-close]')?.addEventListener('click', closeModal)
 
-  searchInput.addEventListener('input', () => {
-    const q = searchInput.value.trim().toLowerCase()
-    picksEl.querySelectorAll<HTMLElement>('.cart-playlist-pick').forEach((btn) => {
-      const name = btn.querySelector('.cart-playlist-pick-name')?.textContent?.toLowerCase() ?? ''
-      const sub = btn.querySelector('.cart-playlist-pick-sub')?.textContent?.toLowerCase() ?? ''
-      const show = !q || name.includes(q) || sub.includes(q)
-      btn.hidden = !show
-    })
-  })
+  bindPlaylistSearch(searchInput, picksEl)
+
+  const addToPlaylist = (playlistId: string): void => {
+    void (async () => {
+      const playlist = playlists.find((p) => p.id === playlistId)
+      if (!playlist || !ctx) return
+
+      pushRecentPlaylist(ctx.userId, playlist.id, playlist.name)
+
+      errorEl.hidden = true
+      picksEl.querySelectorAll('button').forEach((b) => {
+        b.disabled = true
+      })
+      if (alsoLikedInput) alsoLikedInput.disabled = true
+
+      try {
+        const uris = getCartUris()
+        const alsoLiked = alsoLikedInput?.checked ?? false
+        await appendTracksToPlaylist(playlistId, uris)
+        if (alsoLiked) await addCartTracksToLiked()
+        const entries = await getPlaylistTrackEntries(playlistId, ctx.market)
+        upsertCachedPlaylist(
+          {
+            ...playlist,
+            tracks: { total: entries.length },
+          },
+          ctx.userId
+        )
+        clearPlaylistCache()
+        await ctx.onPlaylistsChanged()
+        clearCart()
+        closeModal()
+        ctx.openPlaylist(playlistId)
+      } catch (err) {
+        errorEl.textContent = spotifyErrorMessage(err)
+        errorEl.hidden = false
+        picksEl.querySelectorAll('button').forEach((b) => {
+          b.disabled = false
+        })
+        if (alsoLikedInput) alsoLikedInput.disabled = false
+      }
+    })()
+  }
+
+  bindRecentPlaylists(overlay, recentItems, addToPlaylist)
 
   picksEl.querySelectorAll<HTMLButtonElement>('.cart-playlist-pick').forEach((btn) => {
     btn.addEventListener('click', () => {
-      void (async () => {
-        const playlistId = btn.dataset.playlistId
-        if (!playlistId) return
-
-        const playlist = playlists.find((p) => p.id === playlistId)
-        if (!playlist) return
-
-        errorEl.hidden = true
-        btn.disabled = true
-        picksEl.querySelectorAll('button').forEach((b) => {
-          b.disabled = true
-        })
-
-        try {
-          const uris = getCartUris()
-          await appendTracksToPlaylist(playlistId, uris)
-          const entries = await getPlaylistTrackEntries(playlistId, ctx!.market)
-          upsertCachedPlaylist(
-            {
-              ...playlist,
-              tracks: { total: entries.length },
-            },
-            ctx!.userId
-          )
-          clearPlaylistCache()
-          await ctx!.onPlaylistsChanged()
-          clearCart()
-          closeModal()
-          ctx!.openPlaylist(playlistId)
-        } catch (err) {
-          errorEl.textContent = spotifyErrorMessage(err)
-          errorEl.hidden = false
-          picksEl.querySelectorAll('button').forEach((b) => {
-            b.disabled = false
-          })
-        }
-      })()
+      const playlistId = btn.dataset.playlistId
+      if (playlistId) addToPlaylist(playlistId)
     })
   })
 

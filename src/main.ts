@@ -25,7 +25,7 @@ import {
 } from './spotify/playlistCache'
 import { mountCartUI, unmountCartUI } from './cart/ui'
 import { renderDiscoverView } from './discover/view'
-import { renderPlaylistDetail } from './playlist/detailView'
+import { renderPlaylistDetail, type PlaylistDetailOpts } from './playlist/detailView'
 import {
   bindLibraryDashboard,
   bindManageGroupsModal,
@@ -178,7 +178,7 @@ function renderLogin(missingConfig: boolean, scopeUpgrade = false): void {
   app.innerHTML = `
     <div class="shell login-shell">
       <header class="hero">
-        <p class="eyebrow">Niche</p>
+        <p class="app-name">Niche</p>
         <h1>Your Spotify playlists</h1>
         <p class="lede">
           Connect Spotify to browse every playlist in your library — ones you own,
@@ -466,6 +466,16 @@ function openDiscover(): void {
   )
 }
 
+function playlistDetailOpts(): PlaylistDetailOpts {
+  return {
+    getPlaylists: () => playlists,
+    onOpenPlaylist: (id) => {
+      void openPlaylist(id)
+    },
+    userId,
+  }
+}
+
 async function openPlaylist(playlistId: string): Promise<void> {
   let playlist = playlists.find((p) => p.id === playlistId)
   if (!playlist) {
@@ -502,7 +512,8 @@ async function openPlaylist(playlistId: string): Promise<void> {
         currentView = 'dashboard'
         renderDashboard()
       },
-      (updated) => setCachedEntries(playlistId, userMarket, updated)
+      (updated) => setCachedEntries(playlistId, userMarket, updated),
+      playlistDetailOpts()
     )
     return
   }
@@ -522,7 +533,8 @@ async function openPlaylist(playlistId: string): Promise<void> {
         currentView = 'dashboard'
         renderDashboard()
       },
-      (updated) => setCachedEntries(playlistId, userMarket, updated)
+      (updated) => setCachedEntries(playlistId, userMarket, updated),
+      playlistDetailOpts()
     )
   } catch (e) {
     currentView = 'dashboard'
@@ -630,8 +642,8 @@ function renderDashboard(): void {
     <div class="shell dashboard-shell">
       <header class="topbar">
         <div class="brand">
-          <p class="eyebrow">Niche</p>
-          <h1>Playlist dashboard</h1>
+          <p class="app-name">Niche</p>
+          <h1 class="brand-heading">Playlist dashboard</h1>
         </div>
         <div class="user-chip">
           ${
@@ -660,22 +672,24 @@ function renderDashboard(): void {
       ${statsHtml(activePlaylists())}
 
       <div class="toolbar">
-        <input
-          type="search"
-          id="search"
-          placeholder="Search playlists or owners…"
-          value="${escapeHtml(searchQuery)}"
-        />
-        <button
-          type="button"
-          class="btn-refresh"
-          id="refresh-playlists-btn"
-          ${playlistsRefreshing ? 'disabled' : ''}
-          aria-busy="${playlistsRefreshing}"
-          title="Fetch latest playlists from Spotify"
-        >
-          ${playlistsRefreshing ? 'Refreshing…' : 'Refresh'}
-        </button>
+        <div class="toolbar-search">
+          <input
+            type="search"
+            id="search"
+            placeholder="Search playlists or owners…"
+            value="${escapeHtml(searchQuery)}"
+          />
+          <button
+            type="button"
+            class="btn-refresh"
+            id="refresh-playlists-btn"
+            ${playlistsRefreshing ? 'disabled' : ''}
+            aria-busy="${playlistsRefreshing}"
+            title="Fetch latest playlists from Spotify"
+          >
+            ${playlistsRefreshing ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
         <div class="filters" role="tablist">
           ${(['all', 'yours', 'collaborative', 'followed', 'archived'] as const)
             .map(

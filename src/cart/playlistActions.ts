@@ -1,7 +1,8 @@
-import { spotifyPost } from '../spotify/api'
+import { spotifyPost, spotifyPut } from '../spotify/api'
 import type { SpotifyPlaylist } from '../spotify/types'
 
 const BATCH_SIZE = 100
+const LIKED_BATCH_SIZE = 50
 
 export async function createUserPlaylist(
   userId: string,
@@ -23,5 +24,13 @@ export async function appendTracksToPlaylist(
   for (let i = 0; i < uris.length; i += BATCH_SIZE) {
     const chunk = uris.slice(i, i + BATCH_SIZE)
     await spotifyPost(`/playlists/${playlistId}/items`, { uris: chunk })
+  }
+}
+
+/** Save tracks to the user's Liked Songs library (batched). */
+export async function saveTracksToLiked(trackIds: string[]): Promise<void> {
+  for (let i = 0; i < trackIds.length; i += LIKED_BATCH_SIZE) {
+    const chunk = trackIds.slice(i, i + LIKED_BATCH_SIZE)
+    await spotifyPut('/me/tracks', { ids: chunk })
   }
 }

@@ -4,7 +4,7 @@ const CLIENT_ID = import.meta.env.VITE_SPOTIFY_CLIENT_ID as string
 const REDIRECT_URI = import.meta.env.VITE_REDIRECT_URI as string
 
 /** Bump when scopes change — forces users to reconnect. */
-export const CURRENT_SCOPES_VERSION = '2'
+export const CURRENT_SCOPES_VERSION = '3'
 
 const SCOPES = [
   'playlist-read-private',
@@ -12,6 +12,7 @@ const SCOPES = [
   'user-read-private',
   'user-top-read',
   'user-library-read',
+  'user-library-modify',
   'playlist-modify-private',
   'playlist-modify-public',
 ].join(' ')

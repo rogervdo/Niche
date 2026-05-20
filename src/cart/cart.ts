@@ -74,3 +74,7 @@ export function clearCart(): void {
 export function getCartUris(): string[] {
   return readCart().map(trackUri)
 }
+
+export function getCartTrackIds(): string[] {
+  return readCart().map((t) => t.id)
+}

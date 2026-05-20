@@ -14,6 +14,8 @@ interface TracksCacheStore {
     tracks: SpotifyTrack[]
     /** Spotify playlist position per track (parallel to tracks). */
     positions: number[]
+    /** ISO added_at per track (parallel to tracks). */
+    addedAt?: (string | null)[]
     fetchedAt: number
   }
 }
@@ -112,6 +114,7 @@ export function getCachedPlaylistEntries(
     track,
     position: entry.positions[i]!,
     uri: track.uri ?? `spotify:track:${track.id}`,
+    addedAt: entry.addedAt?.[i] ?? null,
   }))
 }
 
@@ -124,6 +127,7 @@ export function setCachedEntries(
   store[tracksKey(playlistId, market)] = {
     tracks: entries.map((e) => e.track),
     positions: entries.map((e) => e.position),
+    addedAt: entries.map((e) => e.addedAt ?? null),
     fetchedAt: Date.now(),
   }
   writeTracksStore(store)

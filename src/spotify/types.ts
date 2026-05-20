@@ -78,12 +78,15 @@ export interface PlaylistTrackEntry {
   position: number
   uri: string
   track: SpotifyTrack
+  /** ISO 8601 when this track was added to the playlist (from Spotify). */
+  addedAt?: string | null
 }
 
 export interface PlaylistTrackItem {
   track?: SpotifyTrack | null
   item?: SpotifyTrack | null
   is_local?: boolean
+  added_at?: string | null
 }
 
 export interface PlaylistTracksPage {

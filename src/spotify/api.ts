@@ -230,7 +230,12 @@ export async function getPlaylistTrackEntries(
         ) {
           linkedFromCount++
         }
-        entries.push({ position, uri, track })
+        entries.push({
+          position,
+          uri,
+          track,
+          addedAt: item.added_at ?? null,
+        })
       }
       position++
     }
