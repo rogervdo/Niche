@@ -23,19 +23,37 @@ import {
   setCachedEntries,
   upsertCachedPlaylist,
 } from './spotify/playlistCache'
+import { mountCartUI, unmountCartUI } from './cart/ui'
 import { renderDiscoverView } from './discover/view'
 import { renderPlaylistDetail } from './playlist/detailView'
+import {
+  bindLibraryDashboard,
+  bindManageGroupsModal,
+  manageGroupsModalHtml,
+  renderFlatGrid,
+  renderGroupedLibrary,
+  applyCustomSort,
+} from './playlist/libraryDashboard'
+import {
+  loadLibraryPrefs,
+  reconcileLibraryPrefs,
+  saveLibraryPrefs,
+  isArchived,
+  type LibraryPrefs,
+} from './playlist/libraryPrefs'
 import { IMAGE_SIZES, renderImg } from './spotify/images'
 import type { SpotifyImage } from './spotify/images'
 import type { SpotifyPlaylist } from './spotify/types'
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 
-type Filter = 'all' | PlaylistKind
+type Filter = 'all' | PlaylistKind | 'archived'
 type AppView = 'dashboard' | 'discover' | 'detail'
 
 type PlaylistSortMode =
   | 'library'
+  | 'custom'
+  | 'grouped'
   | 'name_asc'
   | 'name_desc'
   | 'tracks_desc'
@@ -48,6 +66,8 @@ type PlaylistSortMode =
 
 const PLAYLIST_SORT_OPTIONS: { mode: PlaylistSortMode; label: string }[] = [
   { mode: 'library', label: 'Spotify library order' },
+  { mode: 'custom', label: 'My order' },
+  { mode: 'grouped', label: 'Grouped' },
   { mode: 'name_asc', label: 'Name (A to Z)' },
   { mode: 'name_desc', label: 'Name (Z to A)' },
   { mode: 'tracks_desc', label: 'Most tracks' },
@@ -70,6 +90,7 @@ const PLAYLIST_FILTERS = new Set<Filter>([
   'yours',
   'collaborative',
   'followed',
+  'archived',
 ])
 
 let playlists: SpotifyPlaylist[] = []
@@ -114,6 +135,27 @@ function loadPlaylistSortMode(): PlaylistSortMode {
 }
 
 let playlistSortMode = loadPlaylistSortMode()
+let libraryPrefs: LibraryPrefs = defaultLibraryPrefsForUser()
+let showGroupsModal = false
+
+function defaultLibraryPrefsForUser(): LibraryPrefs {
+  return { version: 1, order: [], archived: [], groups: [] }
+}
+
+function syncLibraryPrefs(): void {
+  if (!userId) return
+  libraryPrefs = reconcileLibraryPrefs(
+    libraryPrefs,
+    playlists.map((p) => p.id)
+  )
+  saveLibraryPrefs(userId, libraryPrefs)
+}
+
+function setLibraryPrefs(next: LibraryPrefs): void {
+  libraryPrefs = next
+  if (userId) saveLibraryPrefs(userId, libraryPrefs)
+  if (currentView === 'dashboard') renderDashboard()
+}
 
 function escapeHtml(text: string): string {
   const el = document.createElement('div')
@@ -161,10 +203,6 @@ function renderLogin(missingConfig: boolean, scopeUpgrade = false): void {
       <button class="btn-spotify" id="login-btn" ${missingConfig ? 'disabled' : ''}>
         Connect with Spotify
       </button>
-      <p class="footnote">
-        Uses Spotify Authorization Code with PKCE (browser-only, no backend).
-        Inspired by <a href="https://github.com/ethanzohar/discoverify" target="_blank" rel="noreferrer">discoverify</a>.
-      </p>
     </div>
   `
 
@@ -175,9 +213,14 @@ function renderLogin(missingConfig: boolean, scopeUpgrade = false): void {
   }
 }
 
+function activePlaylists(): SpotifyPlaylist[] {
+  return playlists.filter((p) => !isArchived(libraryPrefs, p.id))
+}
+
 function statsHtml(items: SpotifyPlaylist[]): string {
   const counts = { yours: 0, collaborative: 0, followed: 0 }
   for (const p of items) {
+    if (isArchived(libraryPrefs, p.id)) continue
     counts[classifyPlaylist(p, userId)] += 1
   }
   return `
@@ -190,16 +233,33 @@ function statsHtml(items: SpotifyPlaylist[]): string {
   `
 }
 
+function matchesSearch(p: SpotifyPlaylist): boolean {
+  if (!searchQuery) return true
+  const q = searchQuery.toLowerCase()
+  return (
+    p.name.toLowerCase().includes(q) ||
+    (p.owner?.display_name ?? p.owner?.id ?? '').toLowerCase().includes(q)
+  )
+}
+
 function filteredPlaylists(): SpotifyPlaylist[] {
   return playlists.filter((p) => {
+    const archived = isArchived(libraryPrefs, p.id)
+    const q = searchQuery.trim()
+
+    if (activeFilter === 'archived') {
+      if (!archived) return false
+      return matchesSearch(p)
+    }
+
+    if (archived) {
+      if (!q) return false
+      if (!matchesSearch(p)) return false
+    }
+
     const kind = classifyPlaylist(p, userId)
     if (activeFilter !== 'all' && kind !== activeFilter) return false
-    if (!searchQuery) return true
-    const q = searchQuery.toLowerCase()
-    return (
-      p.name.toLowerCase().includes(q) ||
-      (p.owner?.display_name ?? p.owner?.id ?? '').toLowerCase().includes(q)
-    )
+    return matchesSearch(p)
   })
 }
 
@@ -209,6 +269,9 @@ function ownerName(p: SpotifyPlaylist): string {
 
 function sortPlaylists(items: SpotifyPlaylist[]): SpotifyPlaylist[] {
   if (playlistSortMode === 'library') return items
+  if (playlistSortMode === 'custom' || playlistSortMode === 'grouped') {
+    return applyCustomSort(items, libraryPrefs)
+  }
 
   const libraryIndex = new Map(playlists.map((p, i) => [p.id, i]))
   const kindRank: Record<PlaylistKind, number> = {
@@ -326,6 +389,32 @@ function playlistGridSizeControlsHtml(): string {
   `
 }
 
+function usesGroupedLayout(): boolean {
+  return (
+    playlistSortMode === 'grouped' ||
+    (playlistSortMode === 'custom' && libraryPrefs.groups.length > 0)
+  )
+}
+
+function libraryBodyHtml(items: SpotifyPlaylist[]): string {
+  if (items.length === 0) {
+    return '<p class="empty">No playlists match your filters.</p>'
+  }
+  const showMenu = true
+  const draggable = playlistSortMode === 'custom'
+  if (usesGroupedLayout()) {
+    return `<div class="playlist-library">${renderGroupedLibrary(items, libraryPrefs, playlistCard, {
+      draggable,
+      showMenu,
+    })}</div>`
+  }
+  return `<div class="grid" style="--playlist-grid-min: ${playlistGridMin}px">${renderFlatGrid(
+    items,
+    playlistCard,
+    { draggable, showMenu, archived: false }
+  )}</div>`
+}
+
 function playlistCard(p: SpotifyPlaylist): string {
   const kind = classifyPlaylist(p, userId)
   const cover = renderImg({
@@ -385,6 +474,7 @@ async function openPlaylist(playlistId: string): Promise<void> {
       playlist = await spotifyFetch<SpotifyPlaylist>(`/playlists/${playlistId}`)
       if (!playlists.some((p) => p.id === playlist!.id)) {
         playlists = [playlist, ...playlists]
+        syncLibraryPrefs()
       }
       if (userId) {
         setCachedPlaylists(userId, playlists)
@@ -446,12 +536,14 @@ async function loadPlaylists(force = false): Promise<void> {
     const cached = getCachedPlaylists(userId)
     if (cached) {
       playlists = cached
+      syncLibraryPrefs()
       return
     }
   }
 
   playlists = await getAllPlaylists()
   setCachedPlaylists(userId, playlists)
+  syncLibraryPrefs()
 }
 
 async function refreshPlaylists(): Promise<void> {
@@ -480,29 +572,20 @@ function setPlaylistSortMenuOpen(root: HTMLElement, open: boolean): void {
   menu.hidden = !open
 }
 
-function bindPlaylistCards(root: HTMLElement): void {
-  root.querySelectorAll<HTMLButtonElement>('.card[data-playlist-id]').forEach((card) => {
-    card.addEventListener('click', () => {
-      const id = card.dataset.playlistId
-      if (id) void openPlaylist(id)
-    })
+function bindPlaylistLibrary(root: HTMLElement): void {
+  bindLibraryDashboard({
+    root,
+    prefs: libraryPrefs,
+    onPrefsChange: setLibraryPrefs,
+    groups: libraryPrefs.groups,
+    customOrderMode: playlistSortMode === 'custom',
+    openPlaylist: (id) => void openPlaylist(id),
+    cardSelector: '.card[data-playlist-id]',
   })
 }
 
 function updateDashboardResults(): void {
-  const visible = sortPlaylists(filteredPlaylists())
-  const grid = app.querySelector('.grid')
-  const countEl = app.querySelector('.results-count')
-  if (!grid || !countEl) {
-    renderDashboard()
-    return
-  }
-
-  countEl.textContent = `${visible.length} playlist${visible.length === 1 ? '' : 's'}`
-  grid.innerHTML = visible.length
-    ? visible.map(playlistCard).join('')
-    : '<p class="empty">No playlists match your filters.</p>'
-  bindPlaylistCards(app)
+  renderDashboard()
 }
 
 function bindPlaylistSortMenu(root: HTMLElement): void {
@@ -574,7 +657,7 @@ function renderDashboard(): void {
         <button type="button" class="nav-tab" id="discover-tab">Discover Daily</button>
       </div>
 
-      ${statsHtml(playlists)}
+      ${statsHtml(activePlaylists())}
 
       <div class="toolbar">
         <input
@@ -594,14 +677,20 @@ function renderDashboard(): void {
           ${playlistsRefreshing ? 'Refreshing…' : 'Refresh'}
         </button>
         <div class="filters" role="tablist">
-          ${(['all', 'yours', 'collaborative', 'followed'] as const)
+          ${(['all', 'yours', 'collaborative', 'followed', 'archived'] as const)
             .map(
               (f) => `
             <button
               type="button"
               class="filter-btn ${activeFilter === f ? 'active' : ''}"
               data-filter="${f}"
-            >${f === 'all' ? 'All' : formatKind(f)}</button>
+            >${
+              f === 'all'
+                ? 'All'
+                : f === 'archived'
+                  ? 'Archived'
+                  : formatKind(f)
+            }</button>
           `
             )
             .join('')}
@@ -611,18 +700,17 @@ function renderDashboard(): void {
       <div class="results-row">
         <p class="results-count">${visible.length} playlist${visible.length === 1 ? '' : 's'}</p>
         <div class="results-actions">
+          ${playlistSortMode === 'custom' ? '<span class="library-order-hint">Drag cards to reorder</span>' : ''}
+          <button type="button" class="btn-ghost" id="manage-groups-btn">Groups</button>
           ${playlistSortMenuHtml()}
           ${playlistGridSizeControlsHtml()}
         </div>
       </div>
 
-      <div class="grid" style="--playlist-grid-min: ${playlistGridMin}px">
-        ${
-          visible.length
-            ? visible.map(playlistCard).join('')
-            : '<p class="empty">No playlists match your filters.</p>'
-        }
+      <div class="playlist-library-root" style="--playlist-grid-min: ${playlistGridMin}px">
+        ${libraryBodyHtml(visible)}
       </div>
+      ${showGroupsModal ? manageGroupsModalHtml() : ''}
     </div>
   `
 
@@ -633,6 +721,7 @@ function renderDashboard(): void {
   document.getElementById('logout-btn')!.addEventListener('click', () => {
     clearAuth()
     clearPlaylistCache()
+    unmountCartUI()
     playlists = []
     userImages = null
     renderLogin(!isConfigured())
@@ -675,7 +764,19 @@ function renderDashboard(): void {
 
   bindPlaylistSortMenu(app)
 
-  bindPlaylistCards(app)
+  bindPlaylistLibrary(app)
+
+  document.getElementById('manage-groups-btn')?.addEventListener('click', () => {
+    showGroupsModal = true
+    renderDashboard()
+  })
+
+  if (showGroupsModal) {
+    bindManageGroupsModal(app, libraryPrefs, setLibraryPrefs, () => {
+      showGroupsModal = false
+      renderDashboard()
+    })
+  }
 }
 
 function showError(err: unknown): void {
@@ -733,10 +834,23 @@ async function boot(): Promise<void> {
     displayName = user.display_name ?? user.id
     userImages = user.images
     userMarket = user.country ?? 'US'
+    libraryPrefs = loadLibraryPrefs(userId)
+
+    mountCartUI({
+      getPlaylists: () => playlists,
+      userId,
+      market: userMarket,
+      onPlaylistsChanged: async () => {
+        await loadPlaylists(true)
+        if (currentView === 'dashboard') renderDashboard()
+      },
+      openPlaylist: (id) => void openPlaylist(id),
+    })
 
     const cached = getCachedPlaylists(userId)
     if (cached) {
       playlists = cached
+      syncLibraryPrefs()
       renderDashboard()
     } else {
       showLoading('Loading your playlists…')

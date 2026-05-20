@@ -13,12 +13,17 @@ import { resolvePreviewUrl } from '../spotify/preview'
 import { runTrackReplaceFlow } from './trackReplace'
 import { runDuplicateDetectFlow } from './detectDuplicates'
 import { duplicateTrackIds } from '../spotify/trackDuplicates'
+import { addToCart, isInCart, removeFromCart } from '../cart/cart'
+import { NICHE_TRACK_DRAG_TYPE, setCartTrackResolver, updateCartButtons } from '../cart/ui'
+import { iconCheck, iconPlus, iconSearch, iconSwap } from '../ui/icons'
 
 type DetailViewMode = 'list' | 'grid'
 
 type SortMode =
   | 'playlist'
   | 'artist'
+  | 'artist_count'
+  | 'artist_count_desc'
   | 'album'
   | 'popularity'
   | 'popularity_desc'
@@ -31,7 +36,9 @@ type SortMode =
 
 const SORT_OPTIONS: { mode: SortMode; label: string }[] = [
   { mode: 'playlist', label: 'Sort by playlist order' },
-  { mode: 'artist', label: 'Sort by artist' },
+  { mode: 'artist', label: 'Sort by artist (A–Z)' },
+  { mode: 'artist_count', label: 'Sort by artist (fewest songs)' },
+  { mode: 'artist_count_desc', label: 'Sort by artist (most songs)' },
   { mode: 'album', label: 'Sort by album' },
   { mode: 'popularity', label: 'Sort by popularity (least to most)' },
   { mode: 'popularity_desc', label: 'Sort by popularity (most to least)' },
@@ -51,6 +58,18 @@ const AUDIO_SORT_MODES = new Set<SortMode>([
 ])
 
 const POPULARITY_SORT_MODES = new Set<SortMode>(['popularity', 'popularity_desc'])
+
+const ARTIST_GROUP_SORT_MODES = new Set<SortMode>([
+  'artist',
+  'artist_count',
+  'artist_count_desc',
+])
+
+const GROUPED_SORT_MODES = new Set<SortMode>([
+  'album',
+  ...ARTIST_GROUP_SORT_MODES,
+  'release_date',
+])
 
 const GRID_SIZE_MIN = 80
 const GRID_SIZE_MAX = 220
@@ -86,6 +105,7 @@ let detailReplaceCtx: {
 } | null = null
 
 let replaceClickBound = false
+let addToCartClickBound = false
 let duplicateClickBound = false
 
 function resetSortState(playlistId: string): void {
@@ -105,6 +125,28 @@ function primaryArtist(track: SpotifyTrack): string {
   return track.artists[0]?.name ?? ''
 }
 
+function sortGroupLabel(mode: SortMode, track: SpotifyTrack): string | null {
+  if (!GROUPED_SORT_MODES.has(mode)) return null
+  if (ARTIST_GROUP_SORT_MODES.has(mode)) {
+    return primaryArtist(track) || 'Unknown artist'
+  }
+  switch (mode) {
+    case 'album':
+      return track.album.name || 'Unknown album'
+    case 'release_date': {
+      const raw = track.album.release_date
+      if (!raw) return 'Unknown year'
+      return raw.split('-')[0] || 'Unknown year'
+    }
+    default:
+      return null
+  }
+}
+
+function groupSeparatorHtml(label: string): string {
+  return `<div class="track-group-separator" role="separator">${escapeHtml(label)}</div>`
+}
+
 function releaseDateMs(track: SpotifyTrack): number {
   const raw = track.album.release_date
   if (!raw) return 0
@@ -117,6 +159,33 @@ function releaseDateMs(track: SpotifyTrack): number {
 
 function compareText(a: string, b: string): number {
   return a.localeCompare(b, undefined, { sensitivity: 'base' })
+}
+
+function artistTrackCounts(rows: DisplayRow[]): Map<string, number> {
+  const counts = new Map<string, number>()
+  for (const { track } of rows) {
+    const artist = primaryArtist(track) || 'Unknown artist'
+    counts.set(artist, (counts.get(artist) ?? 0) + 1)
+  }
+  return counts
+}
+
+function compareByArtistCount(
+  a: DisplayRow,
+  b: DisplayRow,
+  counts: Map<string, number>,
+  descending: boolean
+): number {
+  const artistA = primaryArtist(a.track) || 'Unknown artist'
+  const artistB = primaryArtist(b.track) || 'Unknown artist'
+  const countA = counts.get(artistA) ?? 0
+  const countB = counts.get(artistB) ?? 0
+  if (countA !== countB) {
+    return descending ? countB - countA : countA - countB
+  }
+  const byArtist = compareText(artistA, artistB)
+  if (byArtist !== 0) return byArtist
+  return compareText(a.track.name, b.track.name)
 }
 
 function featureValue(
@@ -134,6 +203,11 @@ function sortPlaylistRows(
 ): DisplayRow[] {
   if (mode === 'playlist') return rows
 
+  const artistCounts =
+    mode === 'artist_count' || mode === 'artist_count_desc'
+      ? artistTrackCounts(rows)
+      : null
+
   const sorted = [...rows]
   sorted.sort((a, b) => {
     const ta = a.track
@@ -143,6 +217,10 @@ function sortPlaylistRows(
         const cmp = compareText(primaryArtist(ta), primaryArtist(tb))
         return cmp !== 0 ? cmp : compareText(ta.name, tb.name)
       }
+      case 'artist_count':
+        return compareByArtistCount(a, b, artistCounts!, false)
+      case 'artist_count_desc':
+        return compareByArtistCount(a, b, artistCounts!, true)
       case 'album': {
         const cmp = compareText(ta.album.name, tb.album.name)
         return cmp !== 0 ? cmp : compareText(ta.name, tb.name)
@@ -210,24 +288,39 @@ function popularityBadgeHtml(track: SpotifyTrack): string {
   return `<span class="track-popularity-badge" aria-label="Popularity ${pop}">${pop}</span>`
 }
 
+function addToCartButtonHtml(track: SpotifyTrack): string {
+  const inCart = isInCart(track.id)
+  return `
+    <button
+      type="button"
+      class="btn-track-action btn-add-cart${inCart ? ' in-cart' : ''}"
+      draggable="false"
+      data-track-id="${track.id}"
+      title="${inCart ? 'Remove from cart' : 'Add to cart'}"
+      aria-label="${inCart ? 'Remove' : 'Add'} ${escapeHtml(track.name)} ${inCart ? 'from' : 'to'} cart"
+      aria-pressed="${inCart}"
+    >${inCart ? iconCheck(16) : iconPlus(16)}</button>
+  `
+}
+
 function replaceButtonHtml(
   track: SpotifyTrack,
   playlistPosition: number,
   canEdit: boolean
 ): string {
-  const label = canEdit ? 'Replace' : 'Find popular'
   const title = canEdit
     ? 'Search & replace with the most popular version'
     : 'Search for a more popular version and open in Spotify'
   return `
     <button
       type="button"
-      class="btn-track-replace"
+      class="btn-track-action btn-track-replace"
+      draggable="false"
       data-track-id="${track.id}"
       data-playlist-position="${playlistPosition}"
       title="${title}"
       aria-label="${canEdit ? 'Search and replace' : 'Find popular version of'} ${escapeHtml(track.name)}"
-    >${label}</button>
+    >${canEdit ? iconSwap(16) : iconSearch(16)}</button>
   `
 }
 
@@ -245,11 +338,17 @@ function trackRow(row: DisplayRow, index: number, canEdit: boolean): string {
   })
 
   const dupClass = isDuplicateHighlight(track.id) ? ' track-row-duplicate' : ''
+  const inCart = isInCart(track.id)
+  const inCartClass = inCart ? ' track-row-in-cart' : ''
 
   return `
-    <div class="track-row${dupClass}">
+    <div
+      class="track-row${dupClass}${inCartClass}"
+      data-track-id="${track.id}"
+      draggable="true"
+    >
       <span class="track-index">${index + 1}</span>
-      <a class="track-open" href="${track.external_urls.spotify}" target="_blank" rel="noreferrer">
+      <a class="track-open" href="${track.external_urls.spotify}" target="_blank" rel="noreferrer" draggable="false">
         <div class="track-art">
           ${art || `<span class="track-art-placeholder">♪</span>`}
           ${popularityBadgeHtml(track)}
@@ -259,8 +358,13 @@ function trackRow(row: DisplayRow, index: number, canEdit: boolean): string {
           <span class="track-artists">${escapeHtml(artists)} · ${escapeHtml(track.album.name)}</span>
         </div>
       </a>
-      <span class="track-duration">${formatDuration(track.duration_ms)}</span>
-      ${replaceButtonHtml(track, row.playlistPosition, canEdit)}
+      <div class="track-row-end">
+        <div class="track-row-actions">
+          ${addToCartButtonHtml(track)}
+          ${replaceButtonHtml(track, row.playlistPosition, canEdit)}
+        </div>
+        <span class="track-duration">${formatDuration(track.duration_ms)}</span>
+      </div>
     </div>
   `
 }
@@ -279,16 +383,22 @@ function albumCell(track: SpotifyTrack, index: number): string {
 
   const dupClass = isDuplicateHighlight(track.id) ? ' album-cell-duplicate' : ''
 
+  const inCart = isInCart(track.id)
+  const inCartClass = inCart ? ' album-cell-in-cart' : ''
+
   return `
-    <button
-      type="button"
-      class="album-cell${dupClass}"
+    <div
+      class="album-cell${dupClass}${inCartClass}"
+      role="button"
+      tabindex="0"
       data-track-index="${index}"
+      data-track-id="${track.id}"
+      draggable="true"
       aria-label="${escapeHtml(track.name)} by ${escapeHtml(track.artists.map((a) => a.name).join(', '))}"
     >
       ${art || `<span class="album-cell-placeholder">♪</span>`}
       ${popularityBadgeHtml(track)}
-    </button>
+    </div>
   `
 }
 
@@ -304,7 +414,6 @@ function previewPanel(
     return `
       <aside class="album-preview-panel album-preview-panel-empty">
         <p>Hover an album to preview</p>
-        <span class="preview-hint">Plays the first 20 seconds — like <a href="https://discoverquickly.com" target="_blank" rel="noreferrer">Discover Quickly</a></span>
       </aside>
     `
   }
@@ -353,6 +462,7 @@ function previewPanel(
             : ''
         }
         <div class="preview-actions">
+          ${addToCartButtonHtml(track)}
           ${
             pinned
               ? `<button type="button" class="btn-preview-deselect">Deselect</button>`
@@ -360,9 +470,7 @@ function previewPanel(
           }
           ${
             playlistPosition != null
-              ? `<button type="button" class="btn-track-replace" data-track-id="${track.id}" data-playlist-position="${playlistPosition}">${
-                  canEdit ? 'Search & replace' : 'Find popular version'
-                }</button>`
+              ? replaceButtonHtml(track, playlistPosition, canEdit)
               : ''
           }
           <a
@@ -453,6 +561,74 @@ function sortMenuHtml(): string {
   `
 }
 
+function listTracksHtml(rows: DisplayRow[], canEdit: boolean): string {
+  let lastGroup: string | null = null
+  const parts: string[] = []
+  rows.forEach((row, i) => {
+    const group = sortGroupLabel(sortMode, row.track)
+    if (group !== null && group !== lastGroup) {
+      parts.push(groupSeparatorHtml(group))
+      lastGroup = group
+    }
+    parts.push(trackRow(row, i, canEdit))
+  })
+  return `<div class="track-list">${parts.join('')}</div>`
+}
+
+let groupedGridSepObserver: ResizeObserver | null = null
+
+function syncGroupedGridSeparators(grid: HTMLElement): void {
+  const entries = [...grid.querySelectorAll<HTMLElement>('.album-grid-entry')]
+  entries.forEach((entry, i) => {
+    const prev = entries[i - 1]
+    const sameRow =
+      prev != null && Math.abs(prev.offsetTop - entry.offsetTop) < 2
+    entry.classList.toggle('has-sep-before', sameRow)
+  })
+}
+
+function bindGroupedGridSeparators(root: HTMLElement): void {
+  const grid = root.querySelector<HTMLElement>('.album-grid-grouped')
+  if (!grid) return
+
+  const sync = () => syncGroupedGridSeparators(grid)
+  sync()
+  requestAnimationFrame(sync)
+
+  groupedGridSepObserver?.disconnect()
+  groupedGridSepObserver = new ResizeObserver(() => sync())
+  groupedGridSepObserver.observe(grid)
+}
+
+function groupedGridHtml(rows: DisplayRow[]): string {
+  const entries: string[] = []
+  let currentLabel: string | null = null
+  let cells: string[] = []
+
+  const flush = () => {
+    if (currentLabel === null) return
+    entries.push(`
+      <div class="album-grid-entry">
+        <span class="album-grid-label">${escapeHtml(currentLabel)}</span>
+        <div class="album-grid-entry-cells">${cells.join('')}</div>
+      </div>
+    `)
+    cells = []
+  }
+
+  rows.forEach((row, i) => {
+    const label = sortGroupLabel(sortMode, row.track)
+    if (label !== currentLabel) {
+      flush()
+      currentLabel = label
+    }
+    cells.push(albumCell(row.track, i))
+  })
+  flush()
+
+  return entries.join('')
+}
+
 function tracksSection(
   rows: DisplayRow[],
   activeIndex: number | null,
@@ -463,27 +639,55 @@ function tracksSection(
   }
 
   if (viewMode === 'list') {
-    return `
-      <div class="track-list">
-        ${rows.map((row, i) => trackRow(row, i, canEdit)).join('')}
-      </div>
-    `
+    return listTracksHtml(rows, canEdit)
   }
 
   const activeRow = activeIndex != null ? rows[activeIndex] ?? null : null
+  const grouped = GROUPED_SORT_MODES.has(sortMode)
+  const gridBody = grouped
+    ? groupedGridHtml(rows)
+    : rows.map((row, i) => albumCell(row.track, i)).join('')
 
   return `
     <div class="album-grid-layout">
       <div
-        class="album-grid"
+        class="album-grid${grouped ? ' album-grid-grouped' : ''}"
         role="list"
         style="--album-grid-min: ${gridCellSize}px"
       >
-        ${rows.map((row, i) => albumCell(row.track, i)).join('')}
+        ${gridBody}
       </div>
       ${previewPanel(activeRow?.track ?? null, 'idle', undefined, canEdit, false, activeRow?.playlistPosition)}
     </div>
   `
+}
+
+function bindTrackDrag(
+  el: HTMLElement,
+  track: SpotifyTrack,
+  draggingClass: string
+): void {
+  el.addEventListener('dragstart', (e) => {
+    const dt = e.dataTransfer
+    if (!dt) return
+    dt.setData(NICHE_TRACK_DRAG_TYPE, track.id)
+    dt.effectAllowed = 'copy'
+    el.classList.add(draggingClass)
+  })
+
+  el.addEventListener('dragend', () => {
+    el.classList.remove(draggingClass)
+  })
+}
+
+function bindListTrackDrag(root: HTMLElement, rows: DisplayRow[]): void {
+  root.querySelectorAll<HTMLElement>('.track-row[data-track-id]').forEach((row) => {
+    const trackId = row.dataset.trackId
+    if (!trackId) return
+    const track = rows.find((r) => r.track.id === trackId)?.track
+    if (!track) return
+    bindTrackDrag(row, track, 'track-row-dragging')
+  })
 }
 
 function bindGridPreview(
@@ -556,9 +760,21 @@ function bindGridPreview(
     })()
   }
 
-  root.querySelectorAll<HTMLButtonElement>('.album-cell').forEach((cell) => {
+  root.querySelectorAll<HTMLElement>('.album-cell').forEach((cell) => {
     const index = Number(cell.dataset.trackIndex)
     if (Number.isNaN(index)) return
+    const track = rows[index]?.track
+    if (!track) return
+
+    let suppressClick = false
+
+    bindTrackDrag(cell, track, 'album-cell-dragging')
+    cell.addEventListener('dragend', () => {
+      suppressClick = true
+      window.setTimeout(() => {
+        suppressClick = false
+      }, 100)
+    })
 
     cell.addEventListener('mouseenter', () => {
       if (pinnedIndex != null) return
@@ -566,7 +782,14 @@ function bindGridPreview(
     })
 
     cell.addEventListener('click', (e) => {
+      if (suppressClick) return
       e.stopPropagation()
+      selectTrack(index, true)
+    })
+
+    cell.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return
+      e.preventDefault()
       selectTrack(index, true)
     })
   })
@@ -809,6 +1032,38 @@ function bindDetectDuplicates(root: HTMLElement): void {
   })
 }
 
+function bindAddToCart(root: HTMLElement): void {
+  if (addToCartClickBound) return
+  addToCartClickBound = true
+
+  root.addEventListener('click', (e) => {
+    const ctx = detailReplaceCtx
+    if (!ctx) return
+
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(
+      '.btn-add-cart[data-track-id]'
+    )
+    if (!btn) return
+    e.preventDefault()
+    e.stopPropagation()
+
+    const trackId = btn.dataset.trackId
+    if (!trackId) return
+
+    const entry = ctx.entries.find((en) => en.track.id === trackId)
+    if (!entry) return
+
+    if (isInCart(trackId)) {
+      removeFromCart(trackId)
+      showDetailNotice(root, `Removed “${entry.track.name}” from cart.`)
+    } else {
+      addToCart(entry.track)
+      showDetailNotice(root, `Added “${entry.track.name}” to cart.`)
+    }
+    updateCartButtons(root)
+  })
+}
+
 function bindTrackReplace(root: HTMLElement): void {
   if (replaceClickBound) return
   replaceClickBound = true
@@ -990,8 +1245,11 @@ export function renderPlaylistDetail(
     </div>
   `
 
+  setCartTrackResolver((id) => entries.find((en) => en.track.id === id)?.track ?? null)
+
   root.querySelector('#back-btn')!.addEventListener('click', () => {
     stopPreview()
+    setCartTrackResolver(null)
     onBack()
   })
 
@@ -1009,8 +1267,22 @@ export function renderPlaylistDetail(
   bindGridSizeControls(root, playlist, entries, kind, market, onBack, onTracksUpdated)
   bindDetectDuplicates(root)
   bindTrackReplace(root)
+  bindAddToCart(root)
+  updateCartButtons(root)
 
   if (viewMode === 'grid' && displayRows.length) {
+    if (GROUPED_SORT_MODES.has(sortMode)) {
+      bindGroupedGridSeparators(root)
+    } else {
+      groupedGridSepObserver?.disconnect()
+      groupedGridSepObserver = null
+    }
     bindGridPreview(root, displayRows, canEdit)
+  } else {
+    groupedGridSepObserver?.disconnect()
+    groupedGridSepObserver = null
+    if (viewMode === 'list' && displayRows.length) {
+      bindListTrackDrag(root, displayRows)
+    }
   }
 }
