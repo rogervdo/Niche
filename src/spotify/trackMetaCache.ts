@@ -71,10 +71,10 @@ export function setCachedAudioFeatures(features: Iterable<AudioFeatures>): void 
   writeStore(AUDIO_FEATURES_KEY, store)
 }
 
-/** `undefined` = not cached; `null` = cached as unavailable. */
+/** `undefined` = not cached. Only successful URLs are persisted. */
 export function getCachedPreviewUrl(trackId: string): string | null | undefined {
   const entry = readStore<string | null>(PREVIEW_URLS_KEY)[trackId]
-  if (!entry || !isFresh(entry.fetchedAt)) return undefined
+  if (!entry || !isFresh(entry.fetchedAt) || entry.value == null) return undefined
   return entry.value
 }
 

@@ -30,6 +30,7 @@ function mergeTrack(base: SpotifyTrack, full: SpotifyTrack): SpotifyTrack {
   return {
     ...base,
     ...full,
+    preview_url: full.preview_url ?? base.preview_url ?? null,
     album: {
       ...base.album,
       ...full.album,
@@ -118,12 +119,17 @@ export async function enrichPlaylistEntries(
     for (const t of fetched) cached.set(t.id, t)
   }
 
-  await saveCachedTracks(userId, entries.map((e) => e.track))
-
-  return entries.map((entry) => {
+  const enriched = entries.map((entry) => {
     const full = cached.get(entry.track.id)
     return full ? { ...entry, track: mergeTrack(entry.track, full) } : entry
   })
+
+  await saveCachedTracks(
+    userId,
+    enriched.map((e) => e.track)
+  )
+
+  return enriched
 }
 
 export async function getCachedAudioFeatures(

@@ -511,6 +511,7 @@ function mergeTrack(base: SpotifyTrack, full: SpotifyTrack): SpotifyTrack {
   return {
     ...base,
     ...full,
+    preview_url: full.preview_url ?? base.preview_url ?? null,
     album: {
       ...base.album,
       ...full.album,
@@ -557,14 +558,16 @@ export async function enrichPlaylistEntries(
     for (const t of fetched) cached.set(t.id, t)
   }
 
-  setCachedTrackDetails(entries.map((e) => e.track))
-
-  return entries.map((entry) => {
+  const enriched = entries.map((entry) => {
     const full = cached.get(entry.track.id)
     return full
       ? { ...entry, track: mergeTrack(entry.track, full) }
       : entry
   })
+
+  setCachedTrackDetails(enriched.map((e) => e.track))
+
+  return enriched
 }
 
 export const LIKED_SONGS_PLAYLIST_ID = '__niche_liked_songs__'

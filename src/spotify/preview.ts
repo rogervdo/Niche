@@ -74,8 +74,10 @@ async function resolvePreviewUrlParallel(trackId: string): Promise<string | null
       fetchPreviewFromEmbed(trackId),
     ])
     const url = backend ?? embed ?? null
-    resolvedCache.set(trackId, url)
-    setCachedPreviewUrl(trackId, url)
+    if (url) {
+      resolvedCache.set(trackId, url)
+      setCachedPreviewUrl(trackId, url)
+    }
     return url
   })().finally(() => {
     inFlight.delete(trackId)
