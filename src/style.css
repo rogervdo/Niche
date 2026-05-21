@@ -1165,7 +1165,46 @@ code {
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem 1rem;
-  margin-bottom: 1.25rem;
+  margin-bottom: 0.5rem;
+}
+
+.detail-toolbar-leading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  flex: 1 1 16rem;
+  min-width: min(100%, 16rem);
+}
+
+.detail-track-search {
+  display: flex;
+  flex: 1 1 12rem;
+  min-width: min(100%, 12rem);
+}
+
+.detail-track-search-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 2.125rem;
+  padding: 0.45rem 0.9rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.detail-track-search-input:focus {
+  outline: 2px solid var(--accent-dim);
+  outline-offset: 1px;
+}
+
+.detail-track-search-meta {
+  margin: 0 0 0.75rem;
+  font-size: 0.8rem;
+  color: var(--muted);
 }
 
 .detail-toolbar-actions {
@@ -1613,6 +1652,28 @@ code {
   font-weight: 600;
 }
 
+.preview-settings-enable-row {
+  margin-bottom: 1rem;
+}
+
+.preview-settings-enable-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.preview-settings-enable-label input {
+  accent-color: var(--accent);
+}
+
+.preview-settings-section.is-viz-tuning-disabled .preview-settings-viz-tuning {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
 .preview-settings-section-desc {
   margin: 0 0 0.75rem;
   color: var(--muted);
@@ -2013,6 +2074,45 @@ code {
   background: var(--surface);
   border: 1px solid var(--border);
   box-shadow: 0 24px 48px #0008;
+}
+
+.replace-modal-choices {
+  width: min(560px, 100%);
+}
+
+.replace-current-block {
+  margin-bottom: 0.75rem;
+}
+
+.replace-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  margin-bottom: 0.75rem;
+}
+
+.replace-option-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.replace-option-row .replace-compare-track {
+  flex: 1;
+  min-width: 0;
+}
+
+.replace-option-actions {
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.btn-replace-pick {
+  white-space: nowrap;
 }
 
 .replace-modal-title {

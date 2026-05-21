@@ -1,6 +1,6 @@
 import { playPreview, stopPreview, unlockPreviewAudio } from './previewPlayer'
 import { IMAGE_SIZES, renderImg } from '../spotify/images'
-import { getPlaylistTrackEntries, spotifyErrorMessage } from '../spotify/api'
+import { getPlaylistTrackEntries, spotifyErrorMessage, spotifyTrackOpenUrl } from '../spotify/api'
 import { removePlaylistEntryAtPosition } from '../spotify/playlistEdit'
 import {
   duplicateTrackIds,
@@ -178,7 +178,7 @@ function trackCompareRow(
       <div class="dup-track-actions">
         <a
           class="dup-open-link"
-          href="${track.external_urls.spotify}"
+          href="${spotifyTrackOpenUrl(track)}"
           target="_blank"
           rel="noreferrer"
         >Open</a>
@@ -293,43 +293,57 @@ function bindResultsModal(state: ResultsModalState): void {
         clearModalError(overlay)
 
         try {
-          let freshEntries: PlaylistTrackEntry[]
-          try {
-            freshEntries = await removePlaylistEntryAtPosition(
-              playlistId,
-              position,
-              market
+          const countBefore = entries.length
+          const idCopiesBefore = trackId
+            ? entries.filter((e) => e.track.id === trackId).length
+            : entries.filter((e) => e.track.name === rowName).length
+
+          const freshEntries = await removePlaylistEntryAtPosition(
+            playlistId,
+            position,
+            market
+          )
+
+          const otherPositions = freshEntries
+            .filter((e) =>
+              trackId ? e.track.id === trackId : e.track.name === rowName
             )
-            const stillInPlaylist = trackId
+            .map((e) => e.position + 1)
+
+          playlistDebug('dup modal: refresh after remove', {
+            playableCount: freshEntries.length,
+            countBefore,
+            removedPosition: position,
+            idCopiesBefore,
+            idCopiesAfter: trackId
+              ? freshEntries.filter((e) => e.track.id === trackId).length
+              : freshEntries.filter((e) => e.track.name === rowName).length,
+            otherPositions: otherPositions.length ? otherPositions : null,
+          })
+
+          if (freshEntries.length >= countBefore) {
+            const where =
+              otherPositions.length > 0
+                ? ` It is still at #${otherPositions.join(', #')}.`
+                : ''
+            throw new Error(
+              `“${rowName}” is still in the playlist.${where} Try removing again.`
+            )
+          }
+
+          if (
+            idCopiesBefore <= 1 &&
+            (trackId
               ? freshEntries.some((e) => e.track.id === trackId)
-              : freshEntries.some((e) => e.track.name === rowName)
-            const otherPositions = freshEntries
-              .filter((e) =>
-                trackId ? e.track.id === trackId : e.track.name === rowName
-              )
-              .map((e) => e.position + 1)
-            playlistDebug('dup modal: refresh after remove', {
-              playableCount: freshEntries.length,
-              removedPosition: position,
-              stillInPlaylist,
-              otherPositions: otherPositions.length ? otherPositions : null,
-            })
-            if (stillInPlaylist) {
-              const where =
-                otherPositions.length > 0
-                  ? ` It is still at #${otherPositions.join(', #')}.`
-                  : ''
-              throw new Error(
-                `“${rowName}” is still in the playlist.${where} Try removing again.`
-              )
-            }
-          } catch (refreshErr) {
-            const msg = `Track removed from Spotify, but refreshing the playlist failed: ${spotifyErrorMessage(refreshErr)}. Close and reopen the playlist to continue.`
-            showModalError(overlay, msg)
-            state.onError(msg)
-            btn.disabled = false
-            btn.textContent = 'Remove'
-            return
+              : freshEntries.some((e) => e.track.name === rowName))
+          ) {
+            const where =
+              otherPositions.length > 0
+                ? ` It is still at #${otherPositions.join(', #')}.`
+                : ''
+            throw new Error(
+              `“${rowName}” is still in the playlist.${where} Try removing again.`
+            )
           }
 
           entries = freshEntries

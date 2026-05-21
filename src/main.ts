@@ -25,7 +25,11 @@ import {
 } from './spotify/playlistCache'
 import { mountCartUI, unmountCartUI } from './cart/ui'
 import { renderDiscoverView } from './discover/view'
-import { renderPlaylistDetail, type PlaylistDetailOpts } from './playlist/detailView'
+import {
+  renderPlaylistDetail,
+  type PlaylistDetailOpts,
+  type PlaylistDetailRefreshResult,
+} from './playlist/detailView'
 import {
   bindLibraryDashboard,
   bindManageGroupsModal,
@@ -466,12 +470,33 @@ function openDiscover(): void {
   )
 }
 
+async function refreshPlaylistDetail(
+  playlistId: string
+): Promise<PlaylistDetailRefreshResult> {
+  const entries = await getPlaylistTrackEntries(playlistId, userMarket)
+  setCachedEntries(playlistId, userMarket, entries)
+
+  try {
+    const updated = await spotifyFetch<SpotifyPlaylist>(`/playlists/${playlistId}`)
+    const idx = playlists.findIndex((p) => p.id === playlistId)
+    if (idx >= 0) playlists[idx] = updated
+    if (userId) {
+      setCachedPlaylists(userId, playlists)
+      upsertCachedPlaylist(updated, userId)
+    }
+    return { entries, playlist: updated }
+  } catch {
+    return { entries }
+  }
+}
+
 function playlistDetailOpts(): PlaylistDetailOpts {
   return {
     getPlaylists: () => playlists,
     onOpenPlaylist: (id) => {
       void openPlaylist(id)
     },
+    onRefresh: (playlistId) => refreshPlaylistDetail(playlistId),
     userId,
   }
 }

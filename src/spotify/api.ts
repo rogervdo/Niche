@@ -5,14 +5,20 @@ import {
 } from './auth'
 import { playlistDebug } from './playlistDebug'
 import type {
+  AlbumTracksPage,
   AudioFeatures,
   PlaylistTracksPage,
   PlaylistsPage,
+  SearchAlbumsResponse,
+  SearchArtistsResponse,
   SearchTracksResponse,
+  ArtistTopTracksResponse,
+  ArtistAlbumsPage,
   PlaylistTrackEntry,
   SpotifyPlaylist,
   SpotifyTrack,
   SpotifyUser,
+  TracksByIdsResponse,
 } from './types'
 
 const API_ROOT = 'https://api.spotify.com/v1'
@@ -155,13 +161,173 @@ export async function spotifyDelete<T = { snapshot_id?: string }>(
 export async function searchTracks(
   query: string,
   market?: string,
-  limit = 50
+  limit = 50,
+  offset = 0
 ): Promise<SpotifyTrack[]> {
   const marketParam = market ? `&market=${encodeURIComponent(market)}` : ''
   const res = await spotifyFetch<SearchTracksResponse>(
-    `/search?type=track&q=${encodeURIComponent(query)}&limit=${limit}${marketParam}`
+    `/search?type=track&q=${encodeURIComponent(query)}&limit=${limit}&offset=${offset}${marketParam}`
   )
   return (res.tracks?.items ?? []).filter((t) => t?.id)
+}
+
+const SEARCH_PAGE_SIZE = 50
+const SEARCH_MAX_RESULTS = 1000
+
+/** Paginate track search so popular alternates beyond the first page are included. */
+export async function searchTracksDeep(
+  query: string,
+  market?: string,
+  maxResults = SEARCH_MAX_RESULTS
+): Promise<SpotifyTrack[]> {
+  const all: SpotifyTrack[] = []
+  for (let offset = 0; offset < maxResults; offset += SEARCH_PAGE_SIZE) {
+    const page = await searchTracks(query, market, SEARCH_PAGE_SIZE, offset)
+    all.push(...page)
+    if (page.length < SEARCH_PAGE_SIZE) break
+  }
+  return all
+}
+
+/** Full track objects (with popularity) for up to 50 IDs per request. */
+export async function getTracksByIds(
+  trackIds: string[],
+  market?: string
+): Promise<SpotifyTrack[]> {
+  const unique = [...new Set(trackIds.filter(Boolean))]
+  const out: SpotifyTrack[] = []
+  const marketParam = market ? `&market=${encodeURIComponent(market)}` : ''
+
+  for (let i = 0; i < unique.length; i += 50) {
+    const chunk = unique.slice(i, i + 50)
+    const ids = chunk.map(encodeURIComponent).join(',')
+    const res = await spotifyFetch<TracksByIdsResponse>(
+      `/tracks?ids=${ids}${marketParam}`
+    )
+    const found = new Set<string>()
+    for (const t of res.tracks ?? []) {
+      if (t?.id) {
+        found.add(t.id)
+        out.push(t)
+      }
+    }
+
+    // Some catalog duplicates are omitted with market but still discoverable via search.
+    const missing = chunk.filter((id) => !found.has(id))
+    if (missing.length && market) {
+      const fallbackIds = missing.map(encodeURIComponent).join(',')
+      const fallback = await spotifyFetch<TracksByIdsResponse>(
+        `/tracks?ids=${fallbackIds}`
+      )
+      for (const t of fallback.tracks ?? []) {
+        if (t?.id) out.push(t)
+      }
+    }
+  }
+
+  return out
+}
+
+/** All tracks on an album, including popularity. */
+export async function getAlbumTracksFull(
+  albumId: string,
+  market?: string
+): Promise<SpotifyTrack[]> {
+  const ids: string[] = []
+  const marketParam = market ? `&market=${encodeURIComponent(market)}` : ''
+  let url: string | null = `/albums/${albumId}/tracks?limit=50${marketParam}`
+
+  while (url) {
+    const currentUrl = url
+    const path: string = currentUrl.startsWith('http')
+      ? currentUrl.replace('https://api.spotify.com/v1', '')
+      : currentUrl
+    const page: AlbumTracksPage = await spotifyFetch<AlbumTracksPage>(path)
+    for (const item of page.items ?? []) {
+      if (item?.id) ids.push(item.id)
+    }
+    url = page.next ? page.next.replace('https://api.spotify.com/v1', '') : null
+  }
+
+  return getTracksByIds(ids, market)
+}
+
+/** Search albums via Spotify field filters. */
+export async function searchAlbums(
+  query: string,
+  market?: string,
+  limit = 50,
+  offset = 0
+): Promise<{ id: string; name: string; artists: { name: string }[] }[]> {
+  const marketParam = market ? `&market=${encodeURIComponent(market)}` : ''
+  const res = await spotifyFetch<SearchAlbumsResponse>(
+    `/search?type=album&q=${encodeURIComponent(query)}&limit=${limit}&offset=${offset}${marketParam}`
+  )
+  return (res.albums?.items ?? []).filter(
+    (a): a is { id: string; name: string; artists: { name: string }[] } =>
+      Boolean(a?.id)
+  )
+}
+
+export async function searchAlbumsDeep(
+  query: string,
+  market?: string,
+  maxResults = 100
+): Promise<{ id: string; name: string; artists: { name: string }[] }[]> {
+  const all: { id: string; name: string; artists: { name: string }[] }[] = []
+  for (let offset = 0; offset < maxResults; offset += SEARCH_PAGE_SIZE) {
+    const page = await searchAlbums(query, market, SEARCH_PAGE_SIZE, offset)
+    all.push(...page)
+    if (page.length < SEARCH_PAGE_SIZE) break
+  }
+  return all
+}
+
+export async function searchArtistId(
+  name: string,
+  market?: string
+): Promise<string | null> {
+  const marketParam = market ? `&market=${encodeURIComponent(market)}` : ''
+  const res = await spotifyFetch<SearchArtistsResponse>(
+    `/search?type=artist&q=${encodeURIComponent(name)}&limit=1${marketParam}`
+  )
+  return res.artists?.items?.[0]?.id ?? null
+}
+
+export async function getArtistTopTracks(
+  artistId: string,
+  market?: string
+): Promise<SpotifyTrack[]> {
+  const marketParam = market ? `?market=${encodeURIComponent(market)}` : ''
+  const res = await spotifyFetch<ArtistTopTracksResponse>(
+    `/artists/${artistId}/top-tracks${marketParam}`
+  )
+  return (res.tracks ?? []).filter((t) => t?.id)
+}
+
+/** Paginate an artist's album releases (studio, compilations, etc.). */
+export async function getArtistAlbumsDeep(
+  artistId: string,
+  market?: string
+): Promise<{ id: string; name: string; artists: { name: string }[] }[]> {
+  const all: { id: string; name: string; artists: { name: string }[] }[] = []
+  const marketParam = market ? `&market=${encodeURIComponent(market)}` : ''
+  let url: string | null =
+    `/artists/${artistId}/albums?include_groups=album,compilation&limit=50${marketParam}`
+
+  while (url) {
+    const currentUrl = url
+    const path: string = currentUrl.startsWith('http')
+      ? currentUrl.replace('https://api.spotify.com/v1', '')
+      : currentUrl
+    const page: ArtistAlbumsPage = await spotifyFetch<ArtistAlbumsPage>(path)
+    for (const item of page.items ?? []) {
+      if (item?.id) all.push(item)
+    }
+    url = page.next ? page.next.replace('https://api.spotify.com/v1', '') : null
+  }
+
+  return all
 }
 
 export async function getCurrentUser(): Promise<SpotifyUser> {
@@ -184,6 +350,14 @@ export async function getAllPlaylists(): Promise<SpotifyPlaylist[]> {
   }
 
   return all
+}
+
+/** Open URL for a playlist row (original add when Spotify relinked via linked_from). */
+export function spotifyTrackOpenUrl(track: SpotifyTrack): string {
+  if (track.linked_from?.id) {
+    return `https://open.spotify.com/track/${track.linked_from.id}`
+  }
+  return track.external_urls.spotify
 }
 
 /** URI Spotify expects when removing this playlist row (may differ from track.uri). */

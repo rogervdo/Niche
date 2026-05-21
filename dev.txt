@@ -1,0 +1,69 @@
+Niche — local dev commands
+============================
+
+Prerequisites
+-------------
+- Node 18+ (Node 20 recommended: nvm use 20)
+- Spotify Developer app: https://developer.spotify.com/dashboard
+  - Redirect URI: http://127.0.0.1:5173/callback
+  - Add users under Settings → Users and access (dev mode: max 5 accounts)
+- MongoDB (only if running the backend / Discover Daily cron)
+
+First-time setup
+----------------
+# Frontend env
+cp .env.example .env
+# Edit .env: VITE_SPOTIFY_CLIENT_ID, VITE_REDIRECT_URI
+
+# Backend env (optional, for API + daily updates)
+cp backend/.env.example backend/.env
+# Edit backend/.env: SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, DATABASE_URL, etc.
+
+# Install dependencies
+npm install
+cd backend && npm install && cd ..
+
+MongoDB
+-------
+# Docker (recommended)
+npm run db:up          # start Mongo on localhost:27017
+npm run db:down        # stop containers
+
+# Or Homebrew
+brew install mongodb-community
+brew services start mongodb-community
+
+Run — pick one
+--------------
+# Frontend only (playlist dashboard, no daily cron)
+npm run dev:web
+# → http://127.0.0.1:5173
+
+# Frontend + backend together (recommended)
+npm run db:up          # if using backend
+npm run dev
+# → Web: http://127.0.0.1:5173
+# → API: http://127.0.0.1:3001  (Vite proxies /api in dev)
+
+# Or run separately in two terminals:
+npm run dev:web
+npm run dev:api
+
+Useful URLs
+-----------
+Web app:     http://127.0.0.1:5173
+API health:  http://127.0.0.1:3001/api/health
+MongoDB:     mongodb://localhost:27017/niche
+
+Build / preview
+---------------
+npm run build          # frontend production build
+npm run build:api      # backend TypeScript compile
+npm run preview        # preview built frontend
+
+Notes
+-----
+- `npm run dev` checks ports 5173 and 3001 first; if something is still running, stop it (message shows PID).
+- After changing Spotify scopes: Disconnect → Connect with Spotify in the app.
+- Discover Daily auto-update needs backend + MongoDB + "Enable daily updates".
+- VITE_API_BASE_URL: leave empty in dev (proxy handles /api).

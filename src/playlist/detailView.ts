@@ -5,11 +5,17 @@ import type {
   SpotifyPlaylist,
   SpotifyTrack,
 } from '../spotify/types'
-import { getAudioFeatures, spotifyErrorMessage, type PlaylistKind } from '../spotify/api'
+import {
+  getAudioFeatures,
+  spotifyErrorMessage,
+  spotifyTrackOpenUrl,
+  type PlaylistKind,
+} from '../spotify/api'
 import { setCachedEntries } from '../spotify/playlistCache'
 import { isPlaylistDebugEnabled, playlistDebug, playlistDebugWarn } from '../spotify/playlistDebug'
 import { playPreview, stopPreview, unlockPreviewAudio, getPreviewError } from './previewPlayer'
 import { startPreviewVisualizer, stopPreviewVisualizer } from './previewVisualizer'
+import { isVisualizerEnabled } from './previewVisualizerTuning'
 import {
   bindPreviewSettings,
   previewSettingsControlsHtml,
@@ -23,9 +29,15 @@ import { NICHE_TRACK_DRAG_TYPE, setCartTrackResolver, updateCartButtons } from '
 import { iconCheck, iconPlus, iconSearch, iconSwap } from '../ui/icons'
 import { runFindInLibraryFlow } from './findInLibrary'
 
+export type PlaylistDetailRefreshResult = {
+  entries: PlaylistTrackEntry[]
+  playlist?: SpotifyPlaylist
+}
+
 export type PlaylistDetailOpts = {
   getPlaylists: () => SpotifyPlaylist[]
   onOpenPlaylist?: (playlistId: string) => void
+  onRefresh?: (playlistId: string) => Promise<PlaylistDetailRefreshResult>
   userId?: string
 }
 
@@ -230,6 +242,7 @@ let audioFeaturesLoading = false
 let audioFeaturesUnavailable = false
 let currentPlaylistId: string | null = null
 let highlightedDuplicateIds: Set<string> | null = null
+let trackSearchQuery = ''
 
 type DisplayRow = {
   track: SpotifyTrack
@@ -238,6 +251,7 @@ type DisplayRow = {
 }
 
 let detailViewOpts: PlaylistDetailOpts = { getPlaylists: () => [] }
+let playlistDetailRefreshing = false
 
 /** Current detail view context for delegated replace clicks (survives re-renders). */
 let detailReplaceCtx: {
@@ -257,10 +271,28 @@ let duplicateClickBound = false
 function resetSortState(playlistId: string): void {
   if (currentPlaylistId === playlistId) return
   currentPlaylistId = playlistId
+  forceResetDetailData()
+  trackSearchQuery = ''
+}
+
+function forceResetDetailData(): void {
   audioFeaturesById = null
   audioFeaturesLoading = false
   audioFeaturesUnavailable = false
   highlightedDuplicateIds = null
+}
+
+function matchesTrackSearch(track: SpotifyTrack): boolean {
+  const q = trackSearchQuery.trim().toLowerCase()
+  if (!q) return true
+  const artists = track.artists.map((a) => a.name).join(' ')
+  const haystack = `${track.name} ${artists} ${track.album.name}`.toLowerCase()
+  return haystack.includes(q)
+}
+
+function filterDisplayRows(rows: DisplayRow[]): DisplayRow[] {
+  if (!trackSearchQuery.trim()) return rows
+  return rows.filter((row) => matchesTrackSearch(row.track))
 }
 
 async function loadAudioFeaturesIfNeeded(trackIds: string[]): Promise<string | null> {
@@ -632,7 +664,7 @@ function trackRow(row: DisplayRow, index: number, canEdit: boolean): string {
       draggable="true"
     >
       <span class="track-index">${index + 1}</span>
-      <a class="track-open" href="${track.external_urls.spotify}" target="_blank" rel="noreferrer" draggable="false">
+      <a class="track-open" href="${spotifyTrackOpenUrl(track)}" target="_blank" rel="noreferrer" draggable="false">
         <div class="track-art">
           ${art || `<span class="track-art-placeholder">♪</span>`}
           ${artBadgesHtml(track, row)}
@@ -738,7 +770,7 @@ function previewPanel(
   }
 
   const visualizerHtml =
-    status === 'playing'
+    status === 'playing' && isVisualizerEnabled()
       ? `<canvas class="preview-visualizer" aria-hidden="true"></canvas>`
       : ''
 
@@ -780,7 +812,7 @@ function previewPanel(
           >Check playlist</button>
           <a
             class="btn-open-spotify"
-            href="${track.external_urls.spotify}"
+            href="${spotifyTrackOpenUrl(track)}"
             target="_blank"
             rel="noreferrer"
           >Open in Spotify</a>
@@ -1010,13 +1042,39 @@ function groupedGridHtml(rows: DisplayRow[]): string {
   return entries.join('')
 }
 
+function trackSearchHtml(): string {
+  return `
+    <div class="detail-track-search">
+      <input
+        type="search"
+        id="detail-track-search"
+        class="detail-track-search-input"
+        placeholder="Search tracks…"
+        value="${escapeHtml(trackSearchQuery)}"
+        aria-label="Search tracks in this playlist"
+      />
+    </div>
+  `
+}
+
+function trackSearchMetaHtml(visible: number, total: number): string {
+  const q = trackSearchQuery.trim()
+  if (!q || visible === total) return ''
+  return `<p class="detail-track-search-meta">${visible} of ${total} track${total === 1 ? '' : 's'}</p>`
+}
+
 function tracksSection(
   rows: DisplayRow[],
   activeIndex: number | null,
-  canEdit: boolean
+  canEdit: boolean,
+  totalCount?: number
 ): string {
-  if (!rows.length) {
+  const total = totalCount ?? rows.length
+  if (!total) {
     return '<p class="empty">No tracks in this playlist.</p>'
+  }
+  if (!rows.length && trackSearchQuery.trim()) {
+    return `<p class="empty">No tracks match “${escapeHtml(trackSearchQuery.trim())}”.</p>`
   }
 
   if (viewMode === 'list') {
@@ -1083,8 +1141,10 @@ function bindGridPreview(
   let pinnedIndex: number | null = null
   let activeIndex: number | null = null
 
+  let lastPanelStatus: 'idle' | 'loading' | 'playing' | 'unavailable' | 'error' = 'idle'
+
   const syncVisualizer = (status: 'idle' | 'loading' | 'playing' | 'unavailable' | 'error'): void => {
-    if (status !== 'playing') {
+    if (status !== 'playing' || !isVisualizerEnabled()) {
       stopPreviewVisualizer()
       return
     }
@@ -1100,6 +1160,7 @@ function bindGridPreview(
     const layout = root.querySelector('.album-grid-layout')
     if (!layout) return
     if (index != null) activeIndex = index
+    lastPanelStatus = status
     const panel = layout.querySelector('.album-preview-panel')
     const pinned = index != null && index === pinnedIndex
     if (panel) {
@@ -1161,6 +1222,12 @@ function bindGridPreview(
       }
     })()
   }
+
+  const onVizTuningChanged = (): void => {
+    if (activeIndex == null || lastPanelStatus !== 'playing') return
+    updatePanel(activeIndex, 'playing')
+  }
+  window.addEventListener('niche-viz-tuning-changed', onVizTuningChanged)
 
   root.querySelectorAll<HTMLElement>('.album-cell').forEach((cell) => {
     const index = Number(cell.dataset.trackIndex)
@@ -1226,6 +1293,13 @@ function bindGridPreview(
 
   shell?.addEventListener('click', (e) => {
     const target = e.target as HTMLElement
+    if (target.closest('.btn-open-spotify')) {
+      hoverToken += 1
+      stopPreview()
+      const index = pinnedIndex ?? activeIndex
+      if (index != null) updatePanel(index, 'idle')
+      return
+    }
     if (target.closest('.btn-preview-find-library')) {
       e.preventDefault()
       e.stopPropagation()
@@ -1287,6 +1361,70 @@ function closeDetailMenus(root: HTMLElement): void {
     root.querySelector<HTMLButtonElement>('#sort-trigger'),
     false
   )
+}
+
+function bindTrackSearch(
+  root: HTMLElement,
+  playlist: SpotifyPlaylist,
+  entries: PlaylistTrackEntry[],
+  kind: PlaylistKind,
+  market: string,
+  onBack: () => void,
+  onTracksUpdated?: (entries: PlaylistTrackEntry[]) => void
+): void {
+  const input = root.querySelector<HTMLInputElement>('#detail-track-search')
+  if (!input) return
+
+  input.addEventListener('input', () => {
+    const selStart = input.selectionStart
+    const selEnd = input.selectionEnd
+    trackSearchQuery = input.value
+    renderPlaylistDetail(root, playlist, entries, kind, market, onBack, onTracksUpdated)
+    const next = root.querySelector<HTMLInputElement>('#detail-track-search')
+    if (!next) return
+    next.focus()
+    if (selStart != null && selEnd != null) {
+      next.setSelectionRange(selStart, selEnd)
+    }
+  })
+  input.addEventListener('keydown', (e) => e.stopPropagation())
+}
+
+function bindRefreshPlaylist(
+  root: HTMLElement,
+  playlist: SpotifyPlaylist,
+  entries: PlaylistTrackEntry[],
+  kind: PlaylistKind,
+  market: string,
+  onBack: () => void,
+  onTracksUpdated?: (entries: PlaylistTrackEntry[]) => void
+): void {
+  const btn = root.querySelector<HTMLButtonElement>('#refresh-playlist-btn')
+  if (!btn || !detailViewOpts.onRefresh) return
+
+  btn.addEventListener('click', () => {
+    void (async () => {
+      if (playlistDetailRefreshing) return
+      playlistDetailRefreshing = true
+      renderPlaylistDetail(root, playlist, entries, kind, market, onBack, onTracksUpdated)
+
+      try {
+        forceResetDetailData()
+        const { entries: fresh, playlist: updated } = await detailViewOpts.onRefresh!(
+          playlist.id
+        )
+        const pl = updated ?? playlist
+        onTracksUpdated?.(fresh)
+        playlistDetailRefreshing = false
+        renderPlaylistDetail(root, pl, fresh, kind, market, onBack, onTracksUpdated)
+        showDetailNotice(root, 'Playlist refreshed.')
+      } catch (err) {
+        playlistDetailRefreshing = false
+        renderPlaylistDetail(root, playlist, entries, kind, market, onBack, onTracksUpdated)
+        showDetailNotice(root, spotifyErrorMessage(err), true)
+      }
+    })()
+  })
 }
 
 function bindGridSizeControls(
@@ -1705,7 +1843,7 @@ export function renderPlaylistDetail(
     onBack,
     onTracksUpdated,
   }
-  const displayRows = sortPlaylistRows(
+  const sortedRows = sortPlaylistRows(
     entries.map((e) => ({
       track: e.track,
       playlistPosition: e.position,
@@ -1715,6 +1853,8 @@ export function renderPlaylistDetail(
     sortMode,
     audioFeaturesById
   )
+  const displayRows = filterDisplayRows(sortedRows)
+  const totalTrackCount = sortedRows.length
 
   const cover = renderImg({
     images: playlist.images,
@@ -1741,7 +1881,7 @@ export function renderPlaylistDetail(
           <span class="badge badge-${kind}">${formatKind(kind)}</span>
           <h1>${escapeHtml(playlist.name)}</h1>
           <p class="detail-sub">
-            ${escapeHtml(owner)} · ${displayRows.length} track${displayRows.length === 1 ? '' : 's'}
+            ${escapeHtml(owner)} · ${totalTrackCount} track${totalTrackCount === 1 ? '' : 's'}
           </p>
           ${
             playlist.description
@@ -1759,23 +1899,40 @@ export function renderPlaylistDetail(
 
       <div class="detail-tracks-wrap">
         <div class="detail-tracks-toolbar">
-          <div class="detail-view-toggle" role="tablist" aria-label="Track view mode">
-            <button
-              type="button"
-              class="view-mode-btn ${viewMode === 'list' ? 'active' : ''}"
-              data-mode="list"
-              role="tab"
-              aria-selected="${viewMode === 'list'}"
-            >List</button>
-            <button
-              type="button"
-              class="view-mode-btn ${viewMode === 'grid' ? 'active' : ''}"
-              data-mode="grid"
-              role="tab"
-              aria-selected="${viewMode === 'grid'}"
-            >Grid</button>
+          <div class="detail-toolbar-leading">
+            <div class="detail-view-toggle" role="tablist" aria-label="Track view mode">
+              <button
+                type="button"
+                class="view-mode-btn ${viewMode === 'list' ? 'active' : ''}"
+                data-mode="list"
+                role="tab"
+                aria-selected="${viewMode === 'list'}"
+              >List</button>
+              <button
+                type="button"
+                class="view-mode-btn ${viewMode === 'grid' ? 'active' : ''}"
+                data-mode="grid"
+                role="tab"
+                aria-selected="${viewMode === 'grid'}"
+              >Grid</button>
+            </div>
+            ${trackSearchHtml()}
           </div>
           <div class="detail-toolbar-actions">
+            ${
+              detailViewOpts.onRefresh
+                ? `
+            <button
+              type="button"
+              class="btn-refresh"
+              id="refresh-playlist-btn"
+              ${playlistDetailRefreshing ? 'disabled' : ''}
+              aria-busy="${playlistDetailRefreshing}"
+              title="Fetch latest tracks from Spotify"
+            >${playlistDetailRefreshing ? 'Refreshing…' : 'Refresh'}</button>
+            `
+                : ''
+            }
             <button
               type="button"
               class="btn-detect-duplicates"
@@ -1788,8 +1945,9 @@ export function renderPlaylistDetail(
             ${sortMenuHtml()}
           </div>
         </div>
+        ${trackSearchMetaHtml(displayRows.length, totalTrackCount)}
         ${duplicatesBannerHtml()}
-        ${tracksSection(displayRows, null, canEdit)}
+        ${tracksSection(displayRows, null, canEdit, totalTrackCount)}
       </div>
     </div>
   `
@@ -1802,6 +1960,10 @@ export function renderPlaylistDetail(
     onBack()
   })
 
+  root.querySelector('.detail-header .btn-open-spotify')?.addEventListener('click', () => {
+    stopPreview()
+  })
+
   root.querySelectorAll<HTMLButtonElement>('.view-mode-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       const mode = btn.dataset.mode as DetailViewMode
@@ -1812,6 +1974,16 @@ export function renderPlaylistDetail(
     })
   })
 
+  bindTrackSearch(root, playlist, entries, kind, market, onBack, onTracksUpdated)
+  bindRefreshPlaylist(
+    root,
+    playlist,
+    entries,
+    kind,
+    market,
+    onBack,
+    onTracksUpdated
+  )
   bindGroupMenu(root, playlist, entries, kind, market, onBack, onTracksUpdated)
   bindSortMenu(root, playlist, entries, kind, market, onBack, onTracksUpdated)
   bindTagToggles(root, playlist, entries, kind, market, onBack, onTracksUpdated)

@@ -3,6 +3,7 @@ import { applyPreviewAnalyserTuning } from './previewPlayer'
 const TUNING_CHANGED = 'niche-viz-tuning-changed'
 
 export type VisualizerTuning = {
+  enabled: boolean
   sensitivityDb: number
   smoothingLevel: number
   multiplier: number
@@ -13,6 +14,7 @@ export type VisualizerTuning = {
 const STORAGE_KEY = 'niche_viz_tuning_v2'
 
 export const DEFAULT_VISUALIZER_TUNING: VisualizerTuning = {
+  enabled: true,
   sensitivityDb: 48,
   smoothingLevel: 7,
   multiplier: 100,
@@ -28,6 +30,7 @@ function loadTuning(): VisualizerTuning {
     if (!raw) return { ...DEFAULT_VISUALIZER_TUNING }
     const parsed = JSON.parse(raw) as Partial<VisualizerTuning>
     return {
+      enabled: parsed.enabled !== false,
       sensitivityDb: clampNum(parsed.sensitivityDb, 15, 80, DEFAULT_VISUALIZER_TUNING.sensitivityDb),
       smoothingLevel: clampNum(parsed.smoothingLevel, 1, 10, DEFAULT_VISUALIZER_TUNING.smoothingLevel),
       multiplier: clampNum(parsed.multiplier, 5, 100, DEFAULT_VISUALIZER_TUNING.multiplier),
@@ -63,6 +66,10 @@ tuning = loadTuning()
 
 export function getVisualizerTuning(): VisualizerTuning {
   return tuning
+}
+
+export function isVisualizerEnabled(): boolean {
+  return tuning.enabled
 }
 
 function persistTuning(): void {
@@ -143,14 +150,27 @@ function sliderRow(
 export function visualizerSettingsSectionHtml(): string {
   const t = getVisualizerTuning()
   const fftIdx = Math.max(0, FFT_OPTIONS.indexOf(t.fftSize as (typeof FFT_OPTIONS)[number]))
+  const disabledAttr = t.enabled ? '' : ' disabled'
   return `
     <section
-      class="preview-settings-section"
+      class="preview-settings-section${t.enabled ? '' : ' is-viz-tuning-disabled'}"
       data-settings-section="visualizer"
       aria-labelledby="preview-settings-viz-heading"
     >
       <h4 class="preview-settings-section-title" id="preview-settings-viz-heading">Visualizer</h4>
       <p class="preview-settings-section-desc">Audio bar display (Monstercat-style).</p>
+      <div class="preview-settings-row preview-settings-enable-row">
+        <label class="preview-settings-enable-label" for="viz-enabled">
+          <input
+            type="checkbox"
+            id="viz-enabled"
+            data-settings-section="visualizer"
+            ${t.enabled ? 'checked' : ''}
+          />
+          <span>Show visualizer while preview plays</span>
+        </label>
+      </div>
+      <div class="preview-settings-viz-tuning"${disabledAttr}>
       ${sliderRow(
         'viz-sensitivity',
         'Sensitivity',
@@ -209,7 +229,9 @@ export function visualizerSettingsSectionHtml(): string {
         class="preview-settings-reset"
         data-settings-reset="visualizer"
         id="viz-settings-reset"
+        ${disabledAttr}
       >Reset visualizer defaults</button>
+      </div>
     </section>
   `
 }
@@ -240,10 +262,18 @@ export function bindVisualizerSettings(root: HTMLElement): void {
   if (vizBoundRoot === root) return
   vizBoundRoot = root
 
+  root.addEventListener('change', (e) => {
+    const target = e.target as HTMLElement
+    if (target.id !== 'viz-enabled') return
+    setVisualizerTuning({ enabled: (target as HTMLInputElement).checked })
+    refreshVisualizerSettingsSection(root)
+  })
+
   root.addEventListener('input', (e) => {
     const target = e.target as HTMLElement
     if (!target.classList.contains('preview-settings-slider')) return
     if (target.getAttribute('data-settings-section') !== 'visualizer') return
+    if (!isVisualizerEnabled()) return
 
     const id = target.id
     const patch: Partial<VisualizerTuning> = {}
@@ -273,7 +303,7 @@ export function bindVisualizerSettings(root: HTMLElement): void {
 
   root.addEventListener('click', (e) => {
     const btn = (e.target as HTMLElement).closest('[data-settings-reset="visualizer"]')
-    if (!btn) return
+    if (!btn || (btn as HTMLButtonElement).disabled) return
     tuning = { ...DEFAULT_VISUALIZER_TUNING }
     persistTuning()
     applyPreviewAnalyserTuning()

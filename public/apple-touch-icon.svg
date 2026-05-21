@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" role="img" aria-label="Niche">
+  <rect width="180" height="180" rx="40" fill="#141614"/>
+  <path
+    d="M50 130V50h20l36.5 59V50H129v80h-19.2L72.5 69.3V130H50z"
+    fill="#1ed760"
+  />
+</svg>

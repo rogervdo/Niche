@@ -1,6 +1,8 @@
 import { tuningToAnalyser } from './previewVisualizerTuning'
 
 const PREVIEW_DURATION_MS = 20_000
+/** Playback level for 30s Spotify previews (1.0 = full; 0.8 ≈ 20% quieter). */
+const PREVIEW_VOLUME = 0.8
 
 const audioBlobUrlBySource = new Map<string, string>()
 const audioFetchInFlight = new Map<string, Promise<string>>()
@@ -68,6 +70,7 @@ function ensureAudio(): HTMLAudioElement {
   if (!audioEl) {
     audioEl = document.createElement('audio')
     audioEl.preload = 'auto'
+    audioEl.volume = PREVIEW_VOLUME
     audioEl.style.display = 'none'
     document.body.appendChild(audioEl)
   }
@@ -143,6 +146,7 @@ export async function playPreview(previewUrl: string): Promise<boolean> {
     return false
   }
   audio.src = playbackUrl
+  audio.volume = PREVIEW_VOLUME
 
   try {
     if (audio.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {

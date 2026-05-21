@@ -1,5 +1,6 @@
 import { getPreviewAnalyser, isPreviewPlaying, onPreviewStop } from './previewPlayer'
 import {
+  isVisualizerEnabled,
   tuningInputGain,
   tuningLoudThreshold,
 } from './previewVisualizerTuning'
@@ -239,6 +240,7 @@ export function stopPreviewVisualizer(): void {
 }
 
 export function startPreviewVisualizer(canvas: HTMLCanvasElement): void {
+  if (!isVisualizerEnabled()) return
   if (activeCanvas === canvas && rafId != null) return
   stopPreviewVisualizer()
   activeCanvas = canvas
@@ -251,4 +253,5 @@ onPreviewStop(() => stopPreviewVisualizer())
 
 window.addEventListener('niche-viz-tuning-changed', () => {
   bandRanges = null
+  if (!isVisualizerEnabled()) stopPreviewVisualizer()
 })

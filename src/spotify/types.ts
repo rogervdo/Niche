@@ -33,6 +33,7 @@ export interface SpotifyArtist {
 }
 
 export interface SpotifyAlbum {
+  id?: string
   name: string
   release_date?: string
   release_date_precision?: 'year' | 'month' | 'day'
@@ -64,6 +65,39 @@ export interface SearchTracksResponse {
     total: number
   }
 }
+
+export interface SearchAlbumsResponse {
+  albums: {
+    items: ({ id: string; name: string; artists: SpotifyArtist[] } | null)[]
+    total: number
+  }
+}
+
+export interface SearchArtistsResponse {
+  artists: {
+    items: ({ id: string; name: string } | null)[]
+  }
+}
+
+export interface ArtistTopTracksResponse {
+  tracks: SpotifyTrack[]
+}
+
+type ArtistAlbumsPage = {
+  items: ({ id: string; name: string; artists: SpotifyArtist[] } | null)[] | null
+  next: string | null
+}
+
+type AlbumTracksPage = {
+  items: ({ id: string } | null)[] | null
+  next: string | null
+}
+
+type TracksByIdsResponse = {
+  tracks: (SpotifyTrack | null)[]
+}
+
+export type { AlbumTracksPage, ArtistAlbumsPage, TracksByIdsResponse }
 
 export interface AudioFeatures {
   id: string
