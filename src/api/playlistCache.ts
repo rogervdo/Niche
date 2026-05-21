@@ -202,6 +202,22 @@ export async function addTracksToRemoteLikedCache(
   }
 }
 
+export async function removeTracksFromRemoteLikedCache(
+  userId: string,
+  trackIds: string[]
+): Promise<void> {
+  if (!(await isPlaylistCacheApiEnabled()) || !trackIds.length) return
+  try {
+    const accessToken = await getAccessToken()
+    await cacheFetch('/api/cache/liked-tracks/remove', {
+      method: 'POST',
+      body: JSON.stringify({ userId, accessToken, trackIds }),
+    })
+  } catch {
+    /* ignore */
+  }
+}
+
 export async function invalidateRemotePlaylistTracks(
   userId: string,
   playlistId: string,

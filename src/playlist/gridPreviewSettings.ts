@@ -1,5 +1,9 @@
 import { iconGear } from '../ui/icons'
 import {
+  bindLikedHeartsSettings,
+  syncLikedHeartsSettingsUi,
+} from './detailDisplayPrefs'
+import {
   bindVisualizerSettings,
   previewSettingsPopupBodyHtml,
 } from './previewVisualizerTuning'
@@ -71,18 +75,25 @@ export function bindPreviewSettings(root: HTMLElement): void {
   boundRoot = root
 
   bindVisualizerSettings(root)
+  bindLikedHeartsSettings(root)
 
   root.addEventListener('click', (e) => {
-    const gear = (e.target as HTMLElement).closest('#preview-settings-toggle')
+    const target = e.target as HTMLElement
+    if (target.closest('#show-liked-hearts-toggle')) return
+    if (target.closest('.preview-settings-popup')) return
+
+    const gear = target.closest('#preview-settings-toggle')
     if (gear) {
       e.stopPropagation()
       const open = !isPreviewSettingsOpen()
       setPreviewSettingsOpen(open)
       syncPopupUi(root, open)
+      if (open) syncLikedHeartsSettingsUi(root)
       return
     }
+    if (!isPreviewSettingsOpen()) return
     const anchor = root.querySelector('.preview-settings-anchor')
-    if (anchor?.contains(e.target as Node)) return
+    if (anchor?.contains(target)) return
     closePreviewSettings(root)
   })
 
@@ -95,4 +106,5 @@ export function bindPreviewSettings(root: HTMLElement): void {
 export function refreshPreviewSettingsPopup(root: HTMLElement): void {
   const popup = root.querySelector('#preview-settings-popup')
   if (popup) popup.innerHTML = previewSettingsPopupBodyHtml()
+  syncLikedHeartsSettingsUi(root)
 }

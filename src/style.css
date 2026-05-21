@@ -1007,7 +1007,7 @@ code {
 
 .track-row {
   display: grid;
-  grid-template-columns: 1.5rem minmax(0, 1fr) minmax(4.5rem, auto) auto;
+  grid-template-columns: 1.5rem minmax(0, 1fr) auto minmax(4.5rem, auto) auto;
   gap: 0.75rem;
   align-items: center;
   padding: 0.35rem 0.5rem;
@@ -1106,6 +1106,19 @@ code {
 
 .btn-track-action svg {
   display: block;
+}
+
+.btn-scroll-top {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.btn-scroll-top:hover {
+  color: var(--text);
+}
+
+.detail-tracks-sticky:not(.is-stuck) .btn-scroll-top {
+  display: none;
 }
 
 @media (hover: none) {
@@ -1589,36 +1602,57 @@ code {
   color: var(--muted);
 }
 
-.track-name-row {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  min-width: 0;
-}
-
-.track-name-row .track-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.track-liked-heart {
+.btn-track-liked {
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
+  position: relative;
+  z-index: 2;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
   color: var(--muted);
   opacity: 0.55;
+  cursor: pointer;
+  pointer-events: auto;
+  touch-action: manipulation;
+  transition:
+    color 0.12s,
+    opacity 0.12s,
+    background 0.12s;
 }
 
-.track-liked-heart.is-liked {
+.btn-track-liked:hover:not(:disabled) {
+  color: var(--text);
+  opacity: 1;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.btn-track-liked.is-liked {
   color: #1ed760;
   opacity: 1;
 }
 
-.track-liked-heart.is-loading {
+.btn-track-liked.is-liked:hover:not(:disabled) {
+  color: #1ed760;
+}
+
+.btn-track-liked.is-loading,
+.btn-track-liked:disabled {
   opacity: 0.25;
+  cursor: default;
+}
+
+.btn-track-liked svg {
+  pointer-events: none;
+}
+
+.track-liked-heart {
+  /* class kept for grid overlay positioning */
 }
 
 .track-art-badges {
@@ -1899,18 +1933,24 @@ code {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
-.album-cell .track-liked-heart {
+.album-cell .btn-track-liked {
   position: absolute;
   left: 6px;
   bottom: 6px;
-  z-index: 2;
-  padding: 0.15rem;
-  border-radius: 999px;
+  z-index: 5;
+  width: 1.65rem;
+  height: 1.65rem;
   background: #000000b8;
+  pointer-events: auto;
+  touch-action: manipulation;
 }
 
-.album-cell .track-liked-heart.is-liked {
+.album-cell .btn-track-liked.is-liked {
   background: #000000d9;
+}
+
+.album-cell .btn-track-liked:hover:not(:disabled) {
+  background: #000000e6;
 }
 
 .album-cell .track-art-badges {
@@ -1968,8 +2008,14 @@ code {
   position: relative;
   top: auto;
   right: auto;
-  z-index: 1;
+  z-index: 60;
   flex-shrink: 0;
+  overflow: visible;
+}
+
+.detail-tracks-sticky.is-stuck .preview-settings-anchor,
+.detail-toolbar-actions {
+  overflow: visible;
 }
 
 .detail-tracks-toolbar .btn-preview-settings {
@@ -2005,6 +2051,7 @@ code {
   position: absolute;
   top: calc(100% + 0.5rem);
   right: 0;
+  z-index: 100;
   width: min(17.5rem, calc(100vw - 2rem));
   max-height: min(70vh, 28rem);
   overflow: auto;
@@ -2012,6 +2059,7 @@ code {
   border-radius: 10px;
   background: var(--surface);
   box-shadow: 0 12px 32px #000a;
+  pointer-events: auto;
 }
 
 .preview-settings-popup.is-open {
@@ -2067,6 +2115,62 @@ code {
 
 .preview-settings-enable-label input {
   accent-color: var(--accent);
+}
+
+.preview-settings-liked-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  margin: 0;
+  padding: 0.35rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.12s,
+    background 0.12s;
+}
+
+.preview-settings-liked-toggle-row:hover {
+  border-color: color-mix(in srgb, var(--text) 25%, var(--border));
+  background: var(--surface);
+}
+
+.preview-settings-liked-toggle-row.active {
+  border-color: color-mix(in srgb, #1ed760 45%, var(--border));
+  background: color-mix(in srgb, #1ed760 10%, var(--surface-2));
+}
+
+.preview-liked-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  flex-shrink: 0;
+  border-radius: 999px;
+  color: var(--muted);
+  pointer-events: none;
+  transition: color 0.12s;
+}
+
+.preview-settings-liked-toggle-row:hover .preview-liked-toggle {
+  color: var(--text);
+}
+
+.preview-liked-toggle.active {
+  color: #1ed760;
+}
+
+.preview-settings-liked-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
 }
 
 .preview-settings-section.is-viz-tuning-disabled .preview-settings-viz-tuning {
@@ -3252,8 +3356,14 @@ body.has-cart-bar-collapsed {
   }
 
   .track-row {
-    grid-template-columns: 1.5rem minmax(0, 1fr);
+    grid-template-columns: 1.5rem minmax(0, 1fr) auto;
     gap: 0.5rem 0.75rem;
+  }
+
+  .track-row > .btn-track-liked {
+    grid-column: 3;
+    grid-row: 1;
+    align-self: center;
   }
 
   .track-added-at {

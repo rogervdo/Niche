@@ -10,6 +10,7 @@ import {
 import {
   addTracksToLikedCache,
   getCachedLikedTrackIds,
+  removeTracksFromLikedCache,
 } from '../services/likedTracksCacheService.js'
 import {
   enrichPlaylistEntries,
@@ -206,6 +207,29 @@ cacheRouter.post('/liked-tracks/add', async (req, res) => {
 
     await validateUser(userId, accessToken)
     await addTracksToLikedCache(userId, trackIds)
+    res.json({ ok: true })
+  } catch (err) {
+    cacheError(res, err)
+  }
+})
+
+cacheRouter.post('/liked-tracks/remove', async (req, res) => {
+  try {
+    const { userId, accessToken, trackIds } = req.body as {
+      userId?: string
+      accessToken?: string
+      trackIds?: string[]
+    }
+
+    if (!userId || !accessToken || !Array.isArray(trackIds)) {
+      res
+        .status(400)
+        .json({ error: 'userId, accessToken, and trackIds are required' })
+      return
+    }
+
+    await validateUser(userId, accessToken)
+    await removeTracksFromLikedCache(userId, trackIds)
     res.json({ ok: true })
   } catch (err) {
     cacheError(res, err)

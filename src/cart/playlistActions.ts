@@ -1,4 +1,10 @@
-import { markTracksLikedInCache, spotifyPost, spotifyPut } from '../spotify/api'
+import {
+  markTracksLikedInCache,
+  markTracksUnlikedInCache,
+  spotifyDelete,
+  spotifyPost,
+  spotifyPut,
+} from '../spotify/api'
 import type { SpotifyPlaylist } from '../spotify/types'
 
 const BATCH_SIZE = 100
@@ -37,4 +43,16 @@ export async function saveTracksToLiked(
     await spotifyPut('/me/tracks', { ids: chunk })
   }
   await markTracksLikedInCache(trackIds, userId)
+}
+
+/** Remove tracks from the user's Liked Songs library (batched). */
+export async function removeTracksFromLiked(
+  trackIds: string[],
+  userId?: string
+): Promise<void> {
+  for (let i = 0; i < trackIds.length; i += LIKED_BATCH_SIZE) {
+    const chunk = trackIds.slice(i, i + LIKED_BATCH_SIZE)
+    await spotifyDelete('/me/tracks', { ids: chunk })
+  }
+  await markTracksUnlikedInCache(trackIds, userId)
 }

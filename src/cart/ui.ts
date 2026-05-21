@@ -11,7 +11,6 @@ import {
   addToCart,
   clearCart,
   getCartCount,
-  getCartTrackIds,
   getCartTracks,
   getCartUris,
   isInCart,
@@ -179,10 +178,18 @@ function bindAlsoLikedCheckbox(overlay: HTMLElement): HTMLInputElement | null {
   return input
 }
 
-async function addCartTracksToLiked(): Promise<void> {
-  const ids = getCartTrackIds()
+function tracksToUris(tracks: SpotifyTrack[]): string[] {
+  return tracks.map((t) => `spotify:track:${t.id}`)
+}
+
+async function addTracksToLiked(tracks: SpotifyTrack[]): Promise<void> {
+  const ids = tracks.map((t) => t.id)
   if (!ids.length || !ctx) return
   await saveTracksToLiked(ids, ctx.userId)
+}
+
+async function addCartTracksToLiked(): Promise<void> {
+  await addTracksToLiked(getCartTracks())
 }
 
 function cartTrackRow(track: import('../spotify/types').SpotifyTrack): string {
@@ -444,7 +451,21 @@ function playlistPickerRow(p: SpotifyPlaylist): string {
 }
 
 function openAddToPlaylistModal(): void {
-  const count = getCartCount()
+  openAddTracksToPlaylistModal(getCartTracks(), { clearCartOnSuccess: true })
+}
+
+export type AddTracksToPlaylistOpts = {
+  /** Clear the cart after a successful add (cart flow only). */
+  clearCartOnSuccess?: boolean
+  /** Called after tracks are added successfully. */
+  onSuccess?: (playlistName: string) => void
+}
+
+export function openAddTracksToPlaylistModal(
+  tracks: SpotifyTrack[],
+  options?: AddTracksToPlaylistOpts
+): void {
+  const count = tracks.length
   if (!count || !ctx) return
 
   const playlists = editablePlaylists()
@@ -455,7 +476,11 @@ function openAddToPlaylistModal(): void {
         <p class="replace-modal-body">You don't have any playlists you can edit. Create a new one instead.</p>
         <div class="replace-modal-actions">
           <button type="button" class="btn-replace-cancel" data-cart-close>Close</button>
-          <button type="button" class="btn-replace-confirm" id="cart-fallback-create">New playlist</button>
+          ${
+            options?.clearCartOnSuccess
+              ? '<button type="button" class="btn-replace-confirm" id="cart-fallback-create">New playlist</button>'
+              : ''
+          }
         </div>
       </div>
     `)
@@ -469,6 +494,7 @@ function openAddToPlaylistModal(): void {
 
   const allowedIds = new Set(playlists.map((p) => p.id))
   const recentItems = filterRecentPlaylists(loadRecent(ctx.userId), allowedIds)
+  const uris = tracksToUris(tracks)
 
   showModal(`
     <div class="replace-modal cart-modal cart-modal-wide" role="dialog" aria-labelledby="cart-add-title">
@@ -517,10 +543,9 @@ function openAddToPlaylistModal(): void {
       if (alsoLikedInput) alsoLikedInput.disabled = true
 
       try {
-        const uris = getCartUris()
         const alsoLiked = alsoLikedInput?.checked ?? false
         await appendTracksToPlaylist(playlistId, uris)
-        if (alsoLiked) await addCartTracksToLiked()
+        if (alsoLiked) await addTracksToLiked(tracks)
         await invalidateRemotePlaylistTracks(ctx.userId, playlistId, ctx.market)
         const entries = await getPlaylistTrackEntries(playlistId, ctx.market)
         setCachedEntries(playlistId, ctx.market, entries)
@@ -538,9 +563,9 @@ function openAddToPlaylistModal(): void {
           ctx.userId
         )
         await ctx.onPlaylistsChanged()
-        clearCart()
+        if (options?.clearCartOnSuccess) clearCart()
         closeModal()
-        ctx.openPlaylist(playlistId)
+        options?.onSuccess?.(playlist.name)
       } catch (err) {
         errorEl.textContent = spotifyErrorMessage(err)
         errorEl.hidden = false

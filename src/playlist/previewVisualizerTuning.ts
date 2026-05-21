@@ -1,4 +1,5 @@
 import { applyPreviewAnalyserTuning } from './previewPlayer'
+import { likedHeartsSettingsSectionHtml } from './detailDisplayPrefs'
 
 const TUNING_CHANGED = 'niche-viz-tuning-changed'
 
@@ -242,6 +243,7 @@ export function previewSettingsPopupBodyHtml(): string {
     <div class="preview-settings-popup-inner">
       <h3 class="preview-settings-heading">Preview settings</h3>
       <div class="preview-settings-sections">
+        ${likedHeartsSettingsSectionHtml()}
         ${visualizerSettingsSectionHtml()}
       </div>
     </div>

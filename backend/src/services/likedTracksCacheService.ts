@@ -75,6 +75,19 @@ export async function addTracksToLikedCache(
   await doc.save()
 }
 
+export async function removeTracksFromLikedCache(
+  userId: string,
+  trackIds: string[]
+): Promise<void> {
+  if (!trackIds.length) return
+  const doc = await LikedTracksCache.findOne({ userId })
+  if (!doc) return
+  const remove = new Set(trackIds)
+  doc.trackIds = doc.trackIds.filter((id) => !remove.has(id))
+  doc.fetchedAt = new Date()
+  await doc.save()
+}
+
 export async function clearUserLikedTracksCache(userId: string): Promise<void> {
   await LikedTracksCache.deleteOne({ userId })
 }

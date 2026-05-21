@@ -8,10 +8,12 @@ import {
   enrichEntriesFromRemoteCache,
   fetchAudioFeaturesFromRemoteCache,
   fetchLikedTrackIdsFromRemoteCache,
+  removeTracksFromRemoteLikedCache,
 } from '../api/playlistCache'
 import {
   addToLikedTrackIdsCache,
   getCachedLikedTrackIds,
+  removeFromLikedTrackIdsCache,
   setCachedLikedTrackIds,
 } from './likedTracksCache'
 import {
@@ -644,6 +646,16 @@ export async function markTracksLikedInCache(
   if (!trackIds.length) return
   addToLikedTrackIdsCache(trackIds)
   if (userId) void addTracksToRemoteLikedCache(userId, trackIds)
+}
+
+/** Mark tracks as unliked in local and remote caches after removing from Spotify. */
+export async function markTracksUnlikedInCache(
+  trackIds: string[],
+  userId?: string
+): Promise<void> {
+  if (!trackIds.length) return
+  removeFromLikedTrackIdsCache(trackIds)
+  if (userId) void removeTracksFromRemoteLikedCache(userId, trackIds)
 }
 
 /** All saved tracks (Liked Songs), with position and date added. */

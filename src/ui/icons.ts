@@ -44,6 +44,14 @@ export function iconChevronRight(size = 18): string {
   return `<svg ${svgAttrs} width="${size}" height="${size}"><path d="M9 18l6-6-6-6"/></svg>`
 }
 
+export function iconChevronUp(size = 18): string {
+  return `<svg ${svgAttrs} width="${size}" height="${size}"><path d="M18 15l-6-6-6 6"/></svg>`
+}
+
+export function iconPlaylistAdd(size = 18): string {
+  return `<svg ${svgAttrs} width="${size}" height="${size}"><line x1="3" y1="6" x2="13" y2="6"/><line x1="3" y1="12" x2="13" y2="12"/><line x1="3" y1="18" x2="9" y2="18"/><line x1="17" y1="8" x2="17" y2="16"/><line x1="14" y1="12" x2="20" y2="12"/></svg>`
+}
+
 const heartFillAttrs =
   'xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"'
 

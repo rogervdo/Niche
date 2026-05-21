@@ -43,6 +43,14 @@ export function addToLikedTrackIdsCache(trackIds: string[]): void {
   writeEntry({ trackIds: [...set], fetchedAt: Date.now() })
 }
 
+export function removeFromLikedTrackIdsCache(trackIds: string[]): void {
+  const entry = readEntry()
+  if (!entry) return
+  const set = new Set(entry.trackIds)
+  for (const id of trackIds) set.delete(id)
+  writeEntry({ trackIds: [...set], fetchedAt: Date.now() })
+}
+
 export function clearLikedTracksCache(): void {
   try {
     localStorage.removeItem(LIKED_TRACKS_KEY)

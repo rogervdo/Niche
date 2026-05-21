@@ -8,10 +8,13 @@ import type {
 import {
   getAudioFeatures,
   getLikedTrackIds,
+  LIKED_SONGS_PLAYLIST_ID,
   spotifyErrorMessage,
   spotifyTrackOpenUrl,
   type PlaylistKind,
 } from '../spotify/api'
+import { invalidateRemotePlaylistTracks } from '../api/playlistCache'
+import { removeTracksFromLiked, saveTracksToLiked } from '../cart/playlistActions'
 import type { PlaylistRef } from './trackPlaylistIndex'
 import { setCachedEntries } from '../spotify/playlistCache'
 import { isPlaylistDebugEnabled, playlistDebug, playlistDebugWarn } from '../spotify/playlistDebug'
@@ -27,21 +30,32 @@ import { runTrackReplaceFlow } from './trackReplace'
 import { runDuplicateDetectFlow } from './detectDuplicates'
 import { duplicateTrackIds } from '../spotify/trackDuplicates'
 import { addToCart, isInCart, removeFromCart } from '../cart/cart'
-import { NICHE_TRACK_DRAG_TYPE, setCartTrackResolver, updateCartButtons } from '../cart/ui'
+import {
+  NICHE_TRACK_DRAG_TYPE,
+  openAddTracksToPlaylistModal,
+  setCartTrackResolver,
+  updateCartButtons,
+} from '../cart/ui'
 import { mountBarGlass, unmountBarGlass } from '../cart/glass'
 import {
   iconCheck,
+  iconChevronUp,
   iconDuplicates,
   iconHeart,
   iconHeartOutline,
   iconGrid,
   iconList,
+  iconPlaylistAdd,
   iconPlus,
   iconRefresh,
   iconSearch,
   iconSwap,
 } from '../ui/icons'
 import { runFindInLibraryFlow } from './findInLibrary'
+import {
+  isShowLikedHeartsEnabled,
+  LIKED_HEARTS_PREF_EVENT,
+} from './detailDisplayPrefs'
 
 export type PlaylistDetailRefreshResult = {
   entries: PlaylistTrackEntry[]
@@ -295,12 +309,17 @@ let detailReplaceCtx: {
 
 let replaceClickBound = false
 let addToCartClickBound = false
+let addToPlaylistClickBound = false
 let duplicateClickBound = false
 let ownPlaylistTrackIndex: Map<string, PlaylistRef[]> | null = null
 let ownPlaylistTrackIndexPromise: Promise<Map<string, PlaylistRef[]>> | null = null
 let ownPlaylistTagsClickBound = false
 let likedTrackIds: Set<string> | null = null
 let likedTrackIdsPromise: Promise<Set<string>> | null = null
+let likedHeartClickBound = false
+const likedTogglePending = new Set<string>()
+let detailRoot: HTMLElement | null = null
+let likedHeartsPrefListenerBound = false
 
 function resetSortState(playlistId: string): void {
   if (currentPlaylistId === playlistId) return
@@ -340,12 +359,121 @@ function isTrackLiked(trackId: string): boolean | null {
 }
 
 function likedHeartHtml(trackId: string): string {
+  if (!isShowLikedHeartsEnabled()) return ''
   const liked = isTrackLiked(trackId)
   if (liked === null) {
-    return `<span class="track-liked-heart is-loading" aria-hidden="true">${iconHeartOutline(14)}</span>`
+    return `<button type="button" class="btn-track-liked track-liked-heart is-loading" data-track-id="${trackId}" draggable="false" disabled aria-label="Loading liked status">${iconHeartOutline(14)}</button>`
   }
-  const label = liked ? 'In your Liked Songs' : 'Not in Liked Songs'
-  return `<span class="track-liked-heart${liked ? ' is-liked' : ''}" title="${label}" aria-label="${label}">${liked ? iconHeart(14) : iconHeartOutline(14)}</span>`
+  const label = liked ? 'Remove from Liked Songs' : 'Add to Liked Songs'
+  return `<button type="button" class="btn-track-liked track-liked-heart${liked ? ' is-liked' : ''}" data-track-id="${trackId}" draggable="false" title="${label}" aria-label="${label}" aria-pressed="${liked}">${liked ? iconHeart(14) : iconHeartOutline(14)}</button>`
+}
+
+function updateLikedHearts(root: ParentNode): void {
+  root.querySelectorAll<HTMLButtonElement>('.btn-track-liked[data-track-id]').forEach((btn) => {
+    const trackId = btn.dataset.trackId
+    if (!trackId) return
+    const liked = isTrackLiked(trackId)
+    if (liked === null) {
+      btn.disabled = true
+      btn.classList.remove('is-liked')
+      btn.classList.add('is-loading')
+      btn.innerHTML = iconHeartOutline(14)
+      btn.setAttribute('aria-label', 'Loading liked status')
+      btn.removeAttribute('aria-pressed')
+      return
+    }
+    btn.disabled = likedTogglePending.has(trackId)
+    btn.classList.toggle('is-liked', liked)
+    btn.classList.remove('is-loading')
+    btn.innerHTML = liked ? iconHeart(14) : iconHeartOutline(14)
+    btn.setAttribute('aria-pressed', String(liked))
+    const label = liked ? 'Remove from Liked Songs' : 'Add to Liked Songs'
+    btn.title = label
+    btn.setAttribute('aria-label', label)
+  })
+}
+
+async function toggleTrackLiked(root: HTMLElement, trackId: string): Promise<void> {
+  const ctx = detailReplaceCtx
+  if (!ctx || !likedTrackIds || likedTogglePending.has(trackId)) return
+
+  const entry = ctx.entries.find((en) => en.track.id === trackId)
+  if (!entry) return
+
+  const wasLiked = likedTrackIds.has(trackId)
+  const userId = detailViewOpts.userId
+
+  likedTogglePending.add(trackId)
+  if (wasLiked) likedTrackIds.delete(trackId)
+  else likedTrackIds.add(trackId)
+  updateLikedHearts(root)
+
+  try {
+    if (wasLiked) await removeTracksFromLiked([trackId], userId)
+    else await saveTracksToLiked([trackId], userId)
+
+    if (ctx.kind === 'liked' && wasLiked) {
+      const updated = ctx.entries
+        .filter((en) => en.track.id !== trackId)
+        .map((en, position) => ({ ...en, position }))
+      setCachedEntries(LIKED_SONGS_PLAYLIST_ID, ctx.market, updated)
+      if (userId) {
+        void invalidateRemotePlaylistTracks(
+          userId,
+          LIKED_SONGS_PLAYLIST_ID,
+          ctx.market
+        )
+      }
+      detailReplaceCtx = { ...ctx, entries: updated }
+      ctx.onTracksUpdated?.(updated)
+      showDetailNotice(root, `Removed “${entry.track.name}” from Liked Songs.`)
+      renderPlaylistDetail(
+        root,
+        ctx.playlist,
+        updated,
+        ctx.kind,
+        ctx.market,
+        ctx.onBack,
+        ctx.onTracksUpdated
+      )
+      return
+    }
+
+    showDetailNotice(
+      root,
+      wasLiked
+        ? `Removed “${entry.track.name}” from Liked Songs.`
+        : `Added “${entry.track.name}” to Liked Songs.`
+    )
+    updateLikedHearts(root)
+  } catch (err) {
+    if (wasLiked) likedTrackIds.add(trackId)
+    else likedTrackIds.delete(trackId)
+    showDetailNotice(root, spotifyErrorMessage(err), true)
+    updateLikedHearts(root)
+  } finally {
+    likedTogglePending.delete(trackId)
+    updateLikedHearts(root)
+  }
+}
+
+function ensureLikedHeartsPrefListener(): void {
+  if (likedHeartsPrefListenerBound) return
+  likedHeartsPrefListenerBound = true
+  window.addEventListener(LIKED_HEARTS_PREF_EVENT, () => {
+    const root = detailRoot
+    const ctx = detailReplaceCtx
+    if (!root || !ctx) return
+    renderPlaylistDetail(
+      root,
+      ctx.playlist,
+      ctx.entries,
+      ctx.kind,
+      ctx.market,
+      ctx.onBack,
+      ctx.onTracksUpdated
+    )
+  })
 }
 
 function ensureLikedTrackIds(
@@ -357,6 +485,7 @@ function ensureLikedTrackIds(
   onBack: () => void,
   onTracksUpdated?: (entries: PlaylistTrackEntry[]) => void
 ): void {
+  if (!isShowLikedHeartsEnabled()) return
   if (kind === 'liked') {
     likedTrackIds = new Set(entries.map((e) => e.track.id))
     return
@@ -776,6 +905,19 @@ function addToCartButtonHtml(track: SpotifyTrack): string {
   `
 }
 
+function addToPlaylistButtonHtml(track: SpotifyTrack): string {
+  return `
+    <button
+      type="button"
+      class="btn-track-action btn-add-playlist"
+      draggable="false"
+      data-track-id="${track.id}"
+      title="Add to playlist"
+      aria-label="Add ${escapeHtml(track.name)} to playlist"
+    >${iconPlaylistAdd(16)}</button>
+  `
+}
+
 function replaceButtonHtml(
   track: SpotifyTrack,
   playlistPosition: number,
@@ -827,14 +969,12 @@ function trackRow(row: DisplayRow, index: number, canEdit: boolean): string {
           ${artBadgesHtml(track, row)}
         </div>
         <div class="track-info">
-          <span class="track-name-row">
-            <span class="track-name">${escapeHtml(track.name)}</span>
-            ${likedHeartHtml(track.id)}
-          </span>
+          <span class="track-name">${escapeHtml(track.name)}</span>
           <span class="track-artists">${escapeHtml(artists)} · ${escapeHtml(track.album.name)}</span>
           ${ownPlaylistTagsHtml(track.id)}
         </div>
       </a>
+      ${likedHeartHtml(track.id)}
       ${
         row.addedAt
           ? `<span class="track-added-at" title="Added ${escapeHtml(formatAddedAt(row.addedAt))}">${escapeHtml(formatAddedAt(row.addedAt))}</span>`
@@ -842,6 +982,7 @@ function trackRow(row: DisplayRow, index: number, canEdit: boolean): string {
       }
       <div class="track-row-end">
         <div class="track-row-actions">
+          ${addToPlaylistButtonHtml(track)}
           ${addToCartButtonHtml(track)}
           ${replaceButtonHtml(track, row.playlistPosition, canEdit)}
         </div>
@@ -962,6 +1103,7 @@ function previewPanel(
             : ''
         }
         <div class="preview-actions">
+          ${addToPlaylistButtonHtml(track)}
           ${addToCartButtonHtml(track)}
           ${
             playlistPosition != null
@@ -1676,11 +1818,17 @@ function bindDetailStickyBar(root: HTMLElement): void {
   const sentinel = root.querySelector<HTMLElement>('.detail-sticky-sentinel')
   const sticky = root.querySelector<HTMLElement>('.detail-tracks-sticky')
   const shell = root.querySelector<HTMLElement>('.detail-shell')
+  const scrollTopBtn = root.querySelector<HTMLButtonElement>('#detail-scroll-top-btn')
   if (!sentinel || !sticky) return
+
+  scrollTopBtn?.addEventListener('click', () => {
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  })
 
   const setStuck = (stuck: boolean): void => {
     sticky.classList.toggle('is-stuck', stuck)
     shell?.classList.toggle('detail-toolbar-stuck', stuck)
+    scrollTopBtn?.toggleAttribute('hidden', !stuck)
 
     if (stuck) {
       if (detailStickyGlassHost !== sticky) {
@@ -1950,6 +2098,30 @@ function bindDetectDuplicates(root: HTMLElement): void {
   })
 }
 
+function bindLikedHeart(root: HTMLElement): void {
+  if (likedHeartClickBound) return
+  likedHeartClickBound = true
+
+  const onHeartPointer = (e: Event): void => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(
+      '.btn-track-liked[data-track-id]'
+    )
+    if (!btn || btn.disabled) return
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.type === 'mousedown' || e.type === 'pointerdown') return
+
+    const trackId = btn.dataset.trackId
+    if (!trackId || isTrackLiked(trackId) === null) return
+
+    void toggleTrackLiked(root, trackId)
+  }
+
+  root.addEventListener('mousedown', onHeartPointer, true)
+  root.addEventListener('pointerdown', onHeartPointer, true)
+  root.addEventListener('click', onHeartPointer, true)
+}
+
 function bindAddToCart(root: HTMLElement): void {
   if (addToCartClickBound) return
   addToCartClickBound = true
@@ -1979,6 +2151,35 @@ function bindAddToCart(root: HTMLElement): void {
       showDetailNotice(root, `Added “${entry.track.name}” to cart.`)
     }
     updateCartButtons(root)
+  })
+}
+
+function bindAddToPlaylist(root: HTMLElement): void {
+  if (addToPlaylistClickBound) return
+  addToPlaylistClickBound = true
+
+  root.addEventListener('click', (e) => {
+    const ctx = detailReplaceCtx
+    if (!ctx) return
+
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(
+      '.btn-add-playlist[data-track-id]'
+    )
+    if (!btn) return
+    e.preventDefault()
+    e.stopPropagation()
+
+    const trackId = btn.dataset.trackId
+    if (!trackId) return
+
+    const entry = ctx.entries.find((en) => en.track.id === trackId)
+    if (!entry) return
+
+    openAddTracksToPlaylistModal([entry.track], {
+      onSuccess: (playlistName) => {
+        showDetailNotice(root, `Added “${entry.track.name}” to “${playlistName}”.`)
+      },
+    })
   })
 }
 
@@ -2086,6 +2287,8 @@ export function renderPlaylistDetail(
   onTracksUpdated?: (entries: PlaylistTrackEntry[]) => void,
   opts?: PlaylistDetailOpts
 ): void {
+  detailRoot = root
+  ensureLikedHeartsPrefListener()
   if (opts) detailViewOpts = opts
   stopPreview()
   detailStickyObserver?.disconnect()
@@ -2182,6 +2385,14 @@ export function renderPlaylistDetail(
             >◂</button>
             <div class="detail-toolbar-body" id="detail-toolbar-body">
           <div class="detail-toolbar-leading">
+            <button
+              type="button"
+              class="btn-scroll-top btn-icon"
+              id="detail-scroll-top-btn"
+              hidden
+              title="Back to top"
+              aria-label="Back to top"
+            >${iconChevronUp(18)}</button>
             <div class="detail-view-toggle" role="tablist" aria-label="Track view mode">
               <button
                 type="button"
@@ -2231,7 +2442,7 @@ export function renderPlaylistDetail(
             ${gridSizeControlsHtml()}
             ${groupMenuHtml()}
             ${sortMenuHtml()}
-            ${viewMode === 'grid' ? previewSettingsControlsHtml() : ''}
+            ${previewSettingsControlsHtml()}
           </div>
             </div>
           </div>
@@ -2287,8 +2498,11 @@ export function renderPlaylistDetail(
   bindDetectDuplicates(root)
   bindTrackReplace(root)
   bindAddToCart(root)
+  bindLikedHeart(root)
+  bindAddToPlaylist(root)
   bindOwnPlaylistTags(root)
   updateCartButtons(root)
+  updateLikedHearts(root)
 
   ensureOwnPlaylistTrackIndex(
     root,
@@ -2317,7 +2531,6 @@ export function renderPlaylistDetail(
       groupedGridSepObserver = null
     }
     bindGridPreview(root, displayRows, canEdit)
-    bindPreviewSettings(root)
   } else {
     groupedGridSepObserver?.disconnect()
     groupedGridSepObserver = null
@@ -2325,6 +2538,7 @@ export function renderPlaylistDetail(
       bindListTrackDrag(root, displayRows)
     }
   }
+  bindPreviewSettings(root)
 
   const trackIds = entries.map((e) => e.track.id)
   if (
