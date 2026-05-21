@@ -8,13 +8,25 @@ import {
   needsReauth,
 } from './spotify/auth'
 import {
+  buildLikedSongsPlaylist,
   classifyPlaylist,
   getAllPlaylists,
   getCurrentUser,
+  enrichPlaylistEntries,
+  getLikedSongEntries,
   getPlaylistTrackEntries,
+  LIKED_SONGS_PLAYLIST_ID,
   spotifyFetch,
   type PlaylistKind,
 } from './spotify/api'
+import {
+  clearRemotePlaylistCache,
+  fetchPlaylistsFromCache,
+  fetchPlaylistTracksFromCache,
+  resetPlaylistCacheApiProbe,
+  savePlaylistsToRemoteCache,
+  savePlaylistTracksToRemoteCache,
+} from './api/playlistCache'
 import {
   clearPlaylistCache,
   getCachedPlaylists,
@@ -23,6 +35,7 @@ import {
   setCachedEntries,
   upsertCachedPlaylist,
 } from './spotify/playlistCache'
+import type { PlaylistTrackEntry } from './spotify/types'
 import { mountCartUI, unmountCartUI } from './cart/ui'
 import { renderDiscoverView } from './discover/view'
 import {
@@ -30,6 +43,10 @@ import {
   type PlaylistDetailOpts,
   type PlaylistDetailRefreshResult,
 } from './playlist/detailView'
+import {
+  buildOwnPlaylistTrackIndex,
+  clearStoredTagIndex,
+} from './playlist/trackPlaylistIndex'
 import {
   bindLibraryDashboard,
   bindManageGroupsModal,
@@ -115,6 +132,7 @@ let userImages: SpotifyImage[] | null = null
 let userMarket = 'US'
 let currentView: AppView = 'dashboard'
 let playlistsRefreshing = false
+let likedSongsTotal: number | null = null
 
 const PLAYLIST_GRID_MIN = 160
 const PLAYLIST_GRID_MAX = 400
@@ -155,9 +173,19 @@ function syncLibraryPrefs(): void {
   saveLibraryPrefs(userId, libraryPrefs)
 }
 
+function archivedPlaylistIds(): Set<string> {
+  return new Set(libraryPrefs.archived)
+}
+
 function setLibraryPrefs(next: LibraryPrefs): void {
+  const prevArchived = libraryPrefs.archived
   libraryPrefs = next
   if (userId) saveLibraryPrefs(userId, libraryPrefs)
+  const archivedChanged =
+    prevArchived.length !== next.archived.length ||
+    prevArchived.some((id) => !next.archived.includes(id)) ||
+    next.archived.some((id) => !prevArchived.includes(id))
+  if (archivedChanged) clearStoredTagIndex()
   if (currentView === 'dashboard') renderDashboard()
 }
 
@@ -175,6 +203,8 @@ function formatKind(kind: PlaylistKind): string {
       return 'Collaborative'
     case 'followed':
       return 'Followed'
+    case 'liked':
+      return 'Liked Songs'
   }
 }
 
@@ -225,7 +255,10 @@ function statsHtml(items: SpotifyPlaylist[]): string {
   const counts = { yours: 0, collaborative: 0, followed: 0 }
   for (const p of items) {
     if (isArchived(libraryPrefs, p.id)) continue
-    counts[classifyPlaylist(p, userId)] += 1
+    const kind = classifyPlaylist(p, userId)
+    if (kind === 'yours' || kind === 'collaborative' || kind === 'followed') {
+      counts[kind] += 1
+    }
   }
   return `
     <div class="stats">
@@ -282,6 +315,7 @@ function sortPlaylists(items: SpotifyPlaylist[]): SpotifyPlaylist[] {
     yours: 0,
     collaborative: 1,
     followed: 2,
+    liked: 3,
   }
   const publicRank = (p: SpotifyPlaylist) =>
     p.public === true ? 0 : p.public === false ? 1 : 2
@@ -401,18 +435,22 @@ function usesGroupedLayout(): boolean {
 }
 
 function libraryBodyHtml(items: SpotifyPlaylist[]): string {
-  if (items.length === 0) {
+  const likedPrefix = showLikedSongsCard() ? likedSongsCardHtml() : ''
+  if (items.length === 0 && !likedPrefix) {
     return '<p class="empty">No playlists match your filters.</p>'
   }
   const showMenu = true
   const draggable = playlistSortMode === 'custom'
   if (usesGroupedLayout()) {
-    return `<div class="playlist-library">${renderGroupedLibrary(items, libraryPrefs, playlistCard, {
-      draggable,
-      showMenu,
-    })}</div>`
+    return `<div class="playlist-library">${renderGroupedLibrary(
+      items,
+      libraryPrefs,
+      playlistCard,
+      { draggable, showMenu },
+      likedPrefix
+    )}</div>`
   }
-  return `<div class="grid" style="--playlist-grid-min: ${playlistGridMin}px">${renderFlatGrid(
+  return `<div class="grid" style="--playlist-grid-min: ${playlistGridMin}px">${likedPrefix}${renderFlatGrid(
     items,
     playlistCard,
     { draggable, showMenu, archived: false }
@@ -470,11 +508,59 @@ function openDiscover(): void {
   )
 }
 
+async function fetchPlaylistEntries(
+  playlistId: string,
+  force = false
+): Promise<PlaylistTrackEntry[]> {
+  const remote = await fetchPlaylistTracksFromCache(
+    userId,
+    playlistId,
+    userMarket,
+    force
+  )
+  if (remote) {
+    const entries = await enrichPlaylistEntries(
+      remote.entries,
+      userMarket,
+      userId
+    )
+    setCachedEntries(playlistId, userMarket, entries)
+    return entries
+  }
+
+  if (!force) {
+    const local = getCachedPlaylistEntries(playlistId, userMarket)
+    if (local) {
+      const entries = await enrichPlaylistEntries(local, userMarket, userId)
+      if (entries !== local) setCachedEntries(playlistId, userMarket, entries)
+      return entries
+    }
+  }
+
+  let entries =
+    playlistId === LIKED_SONGS_PLAYLIST_ID
+      ? await getLikedSongEntries(userMarket)
+      : await getPlaylistTrackEntries(playlistId, userMarket)
+
+  entries = await enrichPlaylistEntries(entries, userMarket, userId)
+
+  setCachedEntries(playlistId, userMarket, entries)
+  void savePlaylistTracksToRemoteCache(userId, playlistId, userMarket, entries)
+  return entries
+}
+
 async function refreshPlaylistDetail(
   playlistId: string
 ): Promise<PlaylistDetailRefreshResult> {
-  const entries = await getPlaylistTrackEntries(playlistId, userMarket)
-  setCachedEntries(playlistId, userMarket, entries)
+  const entries = await fetchPlaylistEntries(playlistId, true)
+
+  if (playlistId === LIKED_SONGS_PLAYLIST_ID) {
+    likedSongsTotal = entries.length
+    return {
+      entries,
+      playlist: buildLikedSongsPlaylist(entries.length, userId, displayName),
+    }
+  }
 
   try {
     const updated = await spotifyFetch<SpotifyPlaylist>(`/playlists/${playlistId}`)
@@ -483,6 +569,7 @@ async function refreshPlaylistDetail(
     if (userId) {
       setCachedPlaylists(userId, playlists)
       upsertCachedPlaylist(updated, userId)
+      void savePlaylistsToRemoteCache(userId, userMarket, playlists)
     }
     return { entries, playlist: updated }
   } catch {
@@ -498,10 +585,104 @@ function playlistDetailOpts(): PlaylistDetailOpts {
     },
     onRefresh: (playlistId) => refreshPlaylistDetail(playlistId),
     userId,
+    loadOwnPlaylistTrackIndex: () =>
+      buildOwnPlaylistTrackIndex(playlists, userId, userMarket, archivedPlaylistIds()),
+    isPlaylistArchived: (playlistId) => isArchived(libraryPrefs, playlistId),
+  }
+}
+
+function showLikedSongsCard(): boolean {
+  const q = searchQuery.trim().toLowerCase()
+  if (!q) return true
+  return (
+    'liked songs'.includes(q) ||
+    'liked'.includes(q) ||
+    'saved'.includes(q) ||
+    'library'.includes(q)
+  )
+}
+
+function likedSongsCardHtml(): string {
+  const countLabel =
+    likedSongsTotal != null
+      ? `${likedSongsTotal} track${likedSongsTotal === 1 ? '' : 's'}`
+      : 'Saved tracks'
+
+  return `
+    <button type="button" class="card card-liked" data-liked-songs>
+      <div class="card-art">
+        <span class="card-placeholder" aria-hidden="true">♥</span>
+      </div>
+      <div class="card-body">
+        <span class="badge badge-liked">${formatKind('liked')}</span>
+        <h3>Liked Songs</h3>
+        <p class="card-meta">${escapeHtml(displayName)} · ${countLabel}</p>
+      </div>
+    </button>
+  `
+}
+
+async function openLikedSongs(): Promise<void> {
+  currentView = 'detail'
+  const playlistId = LIKED_SONGS_PLAYLIST_ID
+
+  const cachedEntries = getCachedPlaylistEntries(playlistId, userMarket)
+  if (cachedEntries) {
+    likedSongsTotal = cachedEntries.length
+    const playlist = buildLikedSongsPlaylist(cachedEntries.length, userId, displayName)
+    renderPlaylistDetail(
+      app,
+      playlist,
+      cachedEntries,
+      'liked',
+      userMarket,
+      () => {
+        currentView = 'dashboard'
+        renderDashboard()
+      },
+      (updated) => {
+        setCachedEntries(playlistId, userMarket, updated)
+        void savePlaylistTracksToRemoteCache(userId, playlistId, userMarket, updated)
+      },
+      playlistDetailOpts()
+    )
+    return
+  }
+
+  showLoading('Loading Liked Songs…')
+
+  try {
+    const entries = await fetchPlaylistEntries(playlistId, false)
+    likedSongsTotal = entries.length
+    const playlist = buildLikedSongsPlaylist(entries.length, userId, displayName)
+    renderPlaylistDetail(
+      app,
+      playlist,
+      entries,
+      'liked',
+      userMarket,
+      () => {
+        currentView = 'dashboard'
+        renderDashboard()
+      },
+      (updated) => {
+        setCachedEntries(playlistId, userMarket, updated)
+        void savePlaylistTracksToRemoteCache(userId, playlistId, userMarket, updated)
+      },
+      playlistDetailOpts()
+    )
+  } catch (e) {
+    currentView = 'dashboard'
+    renderDashboard()
+    showError(e)
   }
 }
 
 async function openPlaylist(playlistId: string): Promise<void> {
+  if (playlistId === LIKED_SONGS_PLAYLIST_ID) {
+    await openLikedSongs()
+    return
+  }
   let playlist = playlists.find((p) => p.id === playlistId)
   if (!playlist) {
     showLoading('Loading playlist…')
@@ -537,7 +718,10 @@ async function openPlaylist(playlistId: string): Promise<void> {
         currentView = 'dashboard'
         renderDashboard()
       },
-      (updated) => setCachedEntries(playlistId, userMarket, updated),
+      (updated) => {
+        setCachedEntries(playlistId, userMarket, updated)
+        void savePlaylistTracksToRemoteCache(userId, playlistId, userMarket, updated)
+      },
       playlistDetailOpts()
     )
     return
@@ -546,8 +730,7 @@ async function openPlaylist(playlistId: string): Promise<void> {
   showLoading(`Loading “${playlist.name}”…`)
 
   try {
-    const entries = await getPlaylistTrackEntries(playlistId, userMarket)
-    setCachedEntries(playlistId, userMarket, entries)
+    const entries = await fetchPlaylistEntries(playlistId, false)
     renderPlaylistDetail(
       app,
       playlist,
@@ -558,7 +741,10 @@ async function openPlaylist(playlistId: string): Promise<void> {
         currentView = 'dashboard'
         renderDashboard()
       },
-      (updated) => setCachedEntries(playlistId, userMarket, updated),
+      (updated) => {
+        setCachedEntries(playlistId, userMarket, updated)
+        void savePlaylistTracksToRemoteCache(userId, playlistId, userMarket, updated)
+      },
       playlistDetailOpts()
     )
   } catch (e) {
@@ -569,10 +755,18 @@ async function openPlaylist(playlistId: string): Promise<void> {
 }
 
 async function loadPlaylists(force = false): Promise<void> {
+  const remote = await fetchPlaylistsFromCache(userId, userMarket, force)
+  if (remote) {
+    playlists = remote.playlists
+    setCachedPlaylists(userId, playlists)
+    syncLibraryPrefs()
+    return
+  }
+
   if (!force) {
-    const cached = getCachedPlaylists(userId)
-    if (cached) {
-      playlists = cached
+    const local = getCachedPlaylists(userId)
+    if (local) {
+      playlists = local
       syncLibraryPrefs()
       return
     }
@@ -580,6 +774,7 @@ async function loadPlaylists(force = false): Promise<void> {
 
   playlists = await getAllPlaylists()
   setCachedPlaylists(userId, playlists)
+  void savePlaylistsToRemoteCache(userId, userMarket, playlists)
   syncLibraryPrefs()
 }
 
@@ -589,7 +784,7 @@ async function refreshPlaylists(): Promise<void> {
   if (currentView === 'dashboard') renderDashboard()
 
   try {
-    clearPlaylistCache()
+    clearStoredTagIndex()
     await loadPlaylists(true)
   } catch (e) {
     showError(e)
@@ -758,10 +953,14 @@ function renderDashboard(): void {
   })
 
   document.getElementById('logout-btn')!.addEventListener('click', () => {
+    void clearRemotePlaylistCache(userId)
     clearAuth()
     clearPlaylistCache()
+    clearStoredTagIndex()
+    resetPlaylistCacheApiProbe()
     unmountCartUI()
     playlists = []
+    likedSongsTotal = null
     userImages = null
     renderLogin(!isConfigured())
   })
@@ -804,6 +1003,10 @@ function renderDashboard(): void {
   bindPlaylistSortMenu(app)
 
   bindPlaylistLibrary(app)
+
+  app.querySelector<HTMLButtonElement>('[data-liked-songs]')?.addEventListener('click', () => {
+    void openLikedSongs()
+  })
 
   document.getElementById('manage-groups-btn')?.addEventListener('click', () => {
     showGroupsModal = true

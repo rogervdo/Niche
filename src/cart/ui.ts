@@ -1,5 +1,10 @@
 import { classifyPlaylist, getPlaylistTrackEntries, spotifyErrorMessage } from '../spotify/api'
-import { clearPlaylistCache, upsertCachedPlaylist } from '../spotify/playlistCache'
+import {
+  invalidateRemotePlaylistTracks,
+  savePlaylistTracksToRemoteCache,
+  savePlaylistsToRemoteCache,
+} from '../api/playlistCache'
+import { setCachedEntries, upsertCachedPlaylist } from '../spotify/playlistCache'
 import { IMAGE_SIZES, renderImg } from '../spotify/images'
 import type { SpotifyPlaylist } from '../spotify/types'
 import {
@@ -176,8 +181,8 @@ function bindAlsoLikedCheckbox(overlay: HTMLElement): HTMLInputElement | null {
 
 async function addCartTracksToLiked(): Promise<void> {
   const ids = getCartTrackIds()
-  if (!ids.length) return
-  await saveTracksToLiked(ids)
+  if (!ids.length || !ctx) return
+  await saveTracksToLiked(ids, ctx.userId)
 }
 
 function cartTrackRow(track: import('../spotify/types').SpotifyTrack): string {
@@ -398,8 +403,8 @@ function openCreateModal(): void {
           },
           ctx!.userId
         )
-        clearPlaylistCache()
         await ctx!.onPlaylistsChanged()
+        void savePlaylistsToRemoteCache(ctx!.userId, ctx!.market, ctx!.getPlaylists())
         clearCart()
         closeModal()
         ctx!.openPlaylist(playlist.id)
@@ -516,7 +521,15 @@ function openAddToPlaylistModal(): void {
         const alsoLiked = alsoLikedInput?.checked ?? false
         await appendTracksToPlaylist(playlistId, uris)
         if (alsoLiked) await addCartTracksToLiked()
+        await invalidateRemotePlaylistTracks(ctx.userId, playlistId, ctx.market)
         const entries = await getPlaylistTrackEntries(playlistId, ctx.market)
+        setCachedEntries(playlistId, ctx.market, entries)
+        void savePlaylistTracksToRemoteCache(
+          ctx.userId,
+          playlistId,
+          ctx.market,
+          entries
+        )
         upsertCachedPlaylist(
           {
             ...playlist,
@@ -524,7 +537,6 @@ function openAddToPlaylistModal(): void {
           },
           ctx.userId
         )
-        clearPlaylistCache()
         await ctx.onPlaylistsChanged()
         clearCart()
         closeModal()

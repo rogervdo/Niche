@@ -3,6 +3,23 @@ import {
   getAccessToken,
   isInsufficientScopeMessage,
 } from './auth'
+import {
+  addTracksToRemoteLikedCache,
+  enrichEntriesFromRemoteCache,
+  fetchAudioFeaturesFromRemoteCache,
+  fetchLikedTrackIdsFromRemoteCache,
+} from '../api/playlistCache'
+import {
+  addToLikedTrackIdsCache,
+  getCachedLikedTrackIds,
+  setCachedLikedTrackIds,
+} from './likedTracksCache'
+import {
+  getCachedAudioFeaturesMap,
+  getCachedTrackDetails,
+  setCachedAudioFeatures,
+  setCachedTrackDetails,
+} from './trackMetaCache'
 import { playlistDebug } from './playlistDebug'
 import type {
   AlbumTracksPage,
@@ -15,6 +32,7 @@ import type {
   ArtistTopTracksResponse,
   ArtistAlbumsPage,
   PlaylistTrackEntry,
+  SavedTracksPage,
   SpotifyPlaylist,
   SpotifyTrack,
   SpotifyUser,
@@ -448,24 +466,215 @@ type AudioFeaturesResponse = {
 
 /** Audio features for up to 100 track IDs per request; batches larger lists. */
 export async function getAudioFeatures(
-  trackIds: string[]
+  trackIds: string[],
+  userId?: string
 ): Promise<Map<string, AudioFeatures>> {
-  const map = new Map<string, AudioFeatures>()
-  const unique = [...new Set(trackIds)]
-  for (let i = 0; i < unique.length; i += 100) {
-    const chunk = unique.slice(i, i + 100)
+  const unique = [...new Set(trackIds.filter(Boolean))]
+
+  if (userId) {
+    const remote = await fetchAudioFeaturesFromRemoteCache(userId, unique)
+    if (remote) {
+      setCachedAudioFeatures(remote.values())
+      return remote
+    }
+  }
+
+  const map = getCachedAudioFeaturesMap(unique)
+  const missing = unique.filter((id) => !map.has(id))
+
+  for (let i = 0; i < missing.length; i += 100) {
+    const chunk = missing.slice(i, i + 100)
     const ids = chunk.map(encodeURIComponent).join(',')
     const res = await spotifyFetch<AudioFeaturesResponse>(
       `/audio-features?ids=${ids}`
     )
+    const fetched: AudioFeatures[] = []
     for (const feat of res.audio_features ?? []) {
-      if (feat?.id) map.set(feat.id, feat)
+      if (feat?.id) {
+        map.set(feat.id, feat)
+        fetched.push(feat)
+      }
     }
+    if (fetched.length) setCachedAudioFeatures(fetched)
   }
+
   return map
 }
 
-export type PlaylistKind = 'yours' | 'collaborative' | 'followed'
+function trackNeedsEnrichment(track: SpotifyTrack): boolean {
+  return track.popularity == null
+}
+
+function mergeTrack(base: SpotifyTrack, full: SpotifyTrack): SpotifyTrack {
+  return {
+    ...base,
+    ...full,
+    album: {
+      ...base.album,
+      ...full.album,
+      images: full.album.images?.length ? full.album.images : base.album.images,
+    },
+    artists: full.artists?.length ? full.artists : base.artists,
+  }
+}
+
+/** Fill in popularity and other fields missing from playlist/saved-track payloads. */
+export async function enrichPlaylistEntries(
+  entries: PlaylistTrackEntry[],
+  market?: string,
+  userId?: string
+): Promise<PlaylistTrackEntry[]> {
+  if (userId) {
+    const remote = await enrichEntriesFromRemoteCache(
+      userId,
+      market ?? 'US',
+      entries
+    )
+    if (remote) {
+      setCachedTrackDetails(remote.map((e) => e.track))
+      return remote
+    }
+  }
+
+  const needIds = [
+    ...new Set(
+      entries.filter((e) => trackNeedsEnrichment(e.track)).map((e) => e.track.id)
+    ),
+  ]
+  if (!needIds.length) {
+    setCachedTrackDetails(entries.map((e) => e.track))
+    return entries
+  }
+
+  const cached = getCachedTrackDetails(needIds)
+  const missing = needIds.filter((id) => !cached.has(id))
+
+  if (missing.length) {
+    const fetched = await getTracksByIds(missing, market)
+    setCachedTrackDetails(fetched)
+    for (const t of fetched) cached.set(t.id, t)
+  }
+
+  setCachedTrackDetails(entries.map((e) => e.track))
+
+  return entries.map((entry) => {
+    const full = cached.get(entry.track.id)
+    return full
+      ? { ...entry, track: mergeTrack(entry.track, full) }
+      : entry
+  })
+}
+
+export const LIKED_SONGS_PLAYLIST_ID = '__niche_liked_songs__'
+
+export type PlaylistKind = 'yours' | 'collaborative' | 'followed' | 'liked'
+
+/** Synthetic playlist object for the Liked Songs library view. */
+export function buildLikedSongsPlaylist(
+  total: number,
+  userId: string,
+  displayName: string | null
+): SpotifyPlaylist {
+  return {
+    id: LIKED_SONGS_PLAYLIST_ID,
+    name: 'Liked Songs',
+    description: 'Tracks you have saved in your Spotify library.',
+    public: null,
+    collaborative: false,
+    owner: { id: userId, display_name: displayName },
+    tracks: { total },
+    images: null,
+    external_urls: { spotify: 'https://open.spotify.com/collection/tracks' },
+  }
+}
+
+const SAVED_TRACK_IDS_FIELDS = 'items(track(id)),next'
+
+type SavedTrackIdsPage = {
+  items: { track: { id: string } | null }[]
+  next: string | null
+}
+
+/** Paginate Liked Songs IDs only (lightweight). */
+export async function fetchLikedTrackIds(): Promise<string[]> {
+  const trackIds: string[] = []
+  let path: string | null = `/me/tracks?limit=50&fields=${SAVED_TRACK_IDS_FIELDS}`
+
+  while (path) {
+    const page: SavedTrackIdsPage = await spotifyFetch<SavedTrackIdsPage>(path)
+    for (const item of page.items ?? []) {
+      if (item.track?.id) trackIds.push(item.track.id)
+    }
+    path = page.next
+      ? page.next.replace('https://api.spotify.com/v1', '')
+      : null
+  }
+
+  return trackIds
+}
+
+/** Liked Songs IDs with MongoDB + local cache when available. */
+export async function getLikedTrackIds(
+  userId?: string,
+  force = false
+): Promise<Set<string>> {
+  if (!force) {
+    const local = getCachedLikedTrackIds()
+    if (local) return local
+  }
+
+  if (userId) {
+    const remote = await fetchLikedTrackIdsFromRemoteCache(userId, force)
+    if (remote) {
+      setCachedLikedTrackIds(remote.trackIds)
+      return new Set(remote.trackIds)
+    }
+  }
+
+  const trackIds = await fetchLikedTrackIds()
+  setCachedLikedTrackIds(trackIds)
+  return new Set(trackIds)
+}
+
+/** Mark tracks as liked in local and remote caches after saving to Spotify. */
+export async function markTracksLikedInCache(
+  trackIds: string[],
+  userId?: string
+): Promise<void> {
+  if (!trackIds.length) return
+  addToLikedTrackIdsCache(trackIds)
+  if (userId) void addTracksToRemoteLikedCache(userId, trackIds)
+}
+
+/** All saved tracks (Liked Songs), with position and date added. */
+export async function getLikedSongEntries(market?: string): Promise<PlaylistTrackEntry[]> {
+  const entries: PlaylistTrackEntry[] = []
+  const marketParam = market ? `&market=${encodeURIComponent(market)}` : ''
+  let url: string | null = `/me/tracks?limit=50${marketParam}`
+  let position = 0
+
+  while (url) {
+    const path = url.startsWith('http')
+      ? url.replace('https://api.spotify.com/v1', '')
+      : url
+    const page: SavedTracksPage = await spotifyFetch<SavedTracksPage>(path)
+    for (const item of page.items ?? []) {
+      const track = item.track
+      if (track?.id) {
+        entries.push({
+          position,
+          uri: track.uri ?? `spotify:track:${track.id}`,
+          track,
+          addedAt: item.added_at ?? null,
+        })
+      }
+      position++
+    }
+    url = page.next ? page.next.replace('https://api.spotify.com/v1', '') : null
+  }
+
+  return entries
+}
 
 export function classifyPlaylist(
   playlist: SpotifyPlaylist,

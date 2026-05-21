@@ -76,7 +76,8 @@ export function renderGroupedLibrary(
   items: SpotifyPlaylist[],
   prefs: LibraryPrefs,
   cardHtml: PlaylistCardRenderer,
-  opts: { draggable: boolean; showMenu: boolean }
+  opts: { draggable: boolean; showMenu: boolean },
+  prefixHtml = ''
 ): string {
   const byId = new Map(items.map((p) => [p.id, p]))
   const sections = buildLibrarySections(
@@ -85,11 +86,14 @@ export function renderGroupedLibrary(
   )
 
   if (sections.length === 0) {
+    if (prefixHtml) {
+      return `<div class="grid playlist-group-grid">${prefixHtml}</div>`
+    }
     return '<p class="empty">No playlists match your filters.</p>'
   }
 
   return sections
-    .map((section) => {
+    .map((section, index) => {
       const cards = section.playlistIds
         .map((id) => byId.get(id))
         .filter((p): p is SpotifyPlaylist => p != null)
@@ -102,10 +106,12 @@ export function renderGroupedLibrary(
         )
         .join('')
 
+      const gridContent = index === 0 && prefixHtml ? prefixHtml + cards : cards
+
       return `
         <section class="playlist-group-section" data-group-id="${escapeHtml(section.id)}">
           <div class="track-group-separator playlist-group-label" role="separator">${escapeHtml(section.label)}</div>
-          <div class="grid playlist-group-grid">${cards}</div>
+          <div class="grid playlist-group-grid">${gridContent}</div>
         </section>
       `
     })

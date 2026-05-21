@@ -7,10 +7,12 @@ import type {
 } from '../spotify/types'
 import {
   getAudioFeatures,
+  getLikedTrackIds,
   spotifyErrorMessage,
   spotifyTrackOpenUrl,
   type PlaylistKind,
 } from '../spotify/api'
+import type { PlaylistRef } from './trackPlaylistIndex'
 import { setCachedEntries } from '../spotify/playlistCache'
 import { isPlaylistDebugEnabled, playlistDebug, playlistDebugWarn } from '../spotify/playlistDebug'
 import { playPreview, stopPreview, unlockPreviewAudio, getPreviewError } from './previewPlayer'
@@ -26,7 +28,19 @@ import { runDuplicateDetectFlow } from './detectDuplicates'
 import { duplicateTrackIds } from '../spotify/trackDuplicates'
 import { addToCart, isInCart, removeFromCart } from '../cart/cart'
 import { NICHE_TRACK_DRAG_TYPE, setCartTrackResolver, updateCartButtons } from '../cart/ui'
-import { iconCheck, iconPlus, iconSearch, iconSwap } from '../ui/icons'
+import { mountBarGlass, unmountBarGlass } from '../cart/glass'
+import {
+  iconCheck,
+  iconDuplicates,
+  iconHeart,
+  iconHeartOutline,
+  iconGrid,
+  iconList,
+  iconPlus,
+  iconRefresh,
+  iconSearch,
+  iconSwap,
+} from '../ui/icons'
 import { runFindInLibraryFlow } from './findInLibrary'
 
 export type PlaylistDetailRefreshResult = {
@@ -39,6 +53,10 @@ export type PlaylistDetailOpts = {
   onOpenPlaylist?: (playlistId: string) => void
   onRefresh?: (playlistId: string) => Promise<PlaylistDetailRefreshResult>
   userId?: string
+  /** Liked Songs: scan your playlists and tag each track with where it appears. */
+  loadOwnPlaylistTrackIndex?: () => Promise<Map<string, PlaylistRef[]>>
+  /** Hide playlist tags for archived library playlists. */
+  isPlaylistArchived?: (playlistId: string) => boolean
 }
 
 type DetailViewMode = 'list' | 'grid'
@@ -116,6 +134,7 @@ const ARTIST_COUNT_SORT_MODES = new Set<SortMode>(['artist_count', 'artist_count
 
 const GROUP_BY_STORAGE_KEY = 'niche_detail_group_by'
 const SORT_STORAGE_KEY = 'niche_detail_sort'
+const TOOLBAR_COLLAPSED_STORAGE_KEY = 'niche_detail_toolbar_collapsed'
 const TAG_OVERLAY_STORAGE_KEY = 'niche_detail_tag_overlays'
 
 type TagOverlayKey = 'popularity' | 'releaseDate' | 'addedAt'
@@ -244,6 +263,16 @@ let currentPlaylistId: string | null = null
 let highlightedDuplicateIds: Set<string> | null = null
 let trackSearchQuery = ''
 
+function loadToolbarCollapsed(): boolean {
+  try {
+    return localStorage.getItem(TOOLBAR_COLLAPSED_STORAGE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+let detailToolbarCollapsed = loadToolbarCollapsed()
+
 type DisplayRow = {
   track: SpotifyTrack
   playlistPosition: number
@@ -267,6 +296,11 @@ let detailReplaceCtx: {
 let replaceClickBound = false
 let addToCartClickBound = false
 let duplicateClickBound = false
+let ownPlaylistTrackIndex: Map<string, PlaylistRef[]> | null = null
+let ownPlaylistTrackIndexPromise: Promise<Map<string, PlaylistRef[]>> | null = null
+let ownPlaylistTagsClickBound = false
+let likedTrackIds: Set<string> | null = null
+let likedTrackIdsPromise: Promise<Set<string>> | null = null
 
 function resetSortState(playlistId: string): void {
   if (currentPlaylistId === playlistId) return
@@ -280,6 +314,127 @@ function forceResetDetailData(): void {
   audioFeaturesLoading = false
   audioFeaturesUnavailable = false
   highlightedDuplicateIds = null
+  ownPlaylistTrackIndex = null
+  ownPlaylistTrackIndexPromise = null
+  likedTrackIds = null
+  likedTrackIdsPromise = null
+}
+
+function showOwnPlaylistTags(): boolean {
+  return detailReplaceCtx?.kind === 'liked'
+}
+
+function visiblePlaylistTagRefs(trackId: string): PlaylistRef[] {
+  if (!ownPlaylistTrackIndex) return []
+  const refs = ownPlaylistTrackIndex.get(trackId)
+  if (!refs?.length) return []
+  const isArchived = detailViewOpts.isPlaylistArchived
+  if (!isArchived) return refs
+  return refs.filter((p) => !isArchived(p.id))
+}
+
+function isTrackLiked(trackId: string): boolean | null {
+  if (detailReplaceCtx?.kind === 'liked') return true
+  if (!likedTrackIds) return null
+  return likedTrackIds.has(trackId)
+}
+
+function likedHeartHtml(trackId: string): string {
+  const liked = isTrackLiked(trackId)
+  if (liked === null) {
+    return `<span class="track-liked-heart is-loading" aria-hidden="true">${iconHeartOutline(14)}</span>`
+  }
+  const label = liked ? 'In your Liked Songs' : 'Not in Liked Songs'
+  return `<span class="track-liked-heart${liked ? ' is-liked' : ''}" title="${label}" aria-label="${label}">${liked ? iconHeart(14) : iconHeartOutline(14)}</span>`
+}
+
+function ensureLikedTrackIds(
+  root: HTMLElement,
+  playlist: SpotifyPlaylist,
+  entries: PlaylistTrackEntry[],
+  kind: PlaylistKind,
+  market: string,
+  onBack: () => void,
+  onTracksUpdated?: (entries: PlaylistTrackEntry[]) => void
+): void {
+  if (kind === 'liked') {
+    likedTrackIds = new Set(entries.map((e) => e.track.id))
+    return
+  }
+  if (likedTrackIds || likedTrackIdsPromise) return
+
+  likedTrackIdsPromise = getLikedTrackIds(detailViewOpts.userId)
+    .then((ids) => {
+      likedTrackIds = ids
+      likedTrackIdsPromise = null
+      renderPlaylistDetail(root, playlist, entries, kind, market, onBack, onTracksUpdated)
+      return ids
+    })
+    .catch((err) => {
+      likedTrackIdsPromise = null
+      showDetailNotice(root, spotifyErrorMessage(err), true)
+      return new Set<string>()
+    })
+}
+
+function ownPlaylistTagsHtml(trackId: string): string {
+  if (!showOwnPlaylistTags() || !ownPlaylistTrackIndex) return ''
+  const refs = visiblePlaylistTagRefs(trackId)
+  if (!refs.length) return ''
+  const label = refs.map((p) => p.name).join(', ')
+  return `
+    <div class="track-playlist-tags" aria-label="In playlists: ${escapeHtml(label)}">
+      ${refs
+        .map(
+          (p) => `
+        <button
+          type="button"
+          class="track-playlist-tag"
+          data-open-playlist="${p.id}"
+          title="Open ${escapeHtml(p.name)}"
+        >${escapeHtml(p.name)}</button>
+      `
+        )
+        .join('')}
+    </div>
+  `
+}
+
+function likedPlaylistTagsStatusHtml(): string {
+  if (!showOwnPlaylistTags()) return ''
+  if (ownPlaylistTrackIndex) return ''
+  if (ownPlaylistTrackIndexPromise) {
+    return '<span class="detail-playlist-tags-status">Loading your playlists…</span>'
+  }
+  return ''
+}
+
+function ensureOwnPlaylistTrackIndex(
+  root: HTMLElement,
+  playlist: SpotifyPlaylist,
+  entries: PlaylistTrackEntry[],
+  kind: PlaylistKind,
+  market: string,
+  onBack: () => void,
+  onTracksUpdated?: (entries: PlaylistTrackEntry[]) => void
+): void {
+  const load = detailViewOpts.loadOwnPlaylistTrackIndex
+  if (!showOwnPlaylistTags() || !load || ownPlaylistTrackIndex || ownPlaylistTrackIndexPromise) {
+    return
+  }
+
+  ownPlaylistTrackIndexPromise = load()
+    .then((index) => {
+      ownPlaylistTrackIndex = index
+      ownPlaylistTrackIndexPromise = null
+      renderPlaylistDetail(root, playlist, entries, kind, market, onBack, onTracksUpdated)
+      return index
+    })
+    .catch((err) => {
+      ownPlaylistTrackIndexPromise = null
+      showDetailNotice(root, spotifyErrorMessage(err), true)
+      return new Map<string, PlaylistRef[]>()
+    })
 }
 
 function matchesTrackSearch(track: SpotifyTrack): boolean {
@@ -298,7 +453,7 @@ function filterDisplayRows(rows: DisplayRow[]): DisplayRow[] {
 async function loadAudioFeaturesIfNeeded(trackIds: string[]): Promise<string | null> {
   if (audioFeaturesById) return null
   try {
-    audioFeaturesById = await getAudioFeatures(trackIds)
+    audioFeaturesById = await getAudioFeatures(trackIds, detailViewOpts.userId)
     audioFeaturesUnavailable = false
     return null
   } catch (err) {
@@ -564,6 +719,8 @@ function formatKind(kind: PlaylistKind): string {
       return 'Collaborative'
     case 'followed':
       return 'Followed'
+    case 'liked':
+      return 'Liked Songs'
   }
 }
 
@@ -670,8 +827,12 @@ function trackRow(row: DisplayRow, index: number, canEdit: boolean): string {
           ${artBadgesHtml(track, row)}
         </div>
         <div class="track-info">
-          <span class="track-name">${escapeHtml(track.name)}</span>
+          <span class="track-name-row">
+            <span class="track-name">${escapeHtml(track.name)}</span>
+            ${likedHeartHtml(track.id)}
+          </span>
           <span class="track-artists">${escapeHtml(artists)} · ${escapeHtml(track.album.name)}</span>
+          ${ownPlaylistTagsHtml(track.id)}
         </div>
       </a>
       ${
@@ -720,6 +881,7 @@ function albumCell(row: DisplayRow, index: number): string {
     >
       ${art || `<span class="album-cell-placeholder">♪</span>`}
       ${artBadgesHtml(track, row)}
+      ${likedHeartHtml(track.id)}
     </div>
   `
 }
@@ -792,6 +954,7 @@ function previewPanel(
         <h2 class="preview-track-name">${escapeHtml(track.name)}</h2>
         <p class="preview-artists">${escapeHtml(artists)}</p>
         <p class="preview-album">${escapeHtml(track.album.name)}${year ? ` · ${escapeHtml(year)}` : ''} · ${formatDuration(track.duration_ms)}</p>
+        ${ownPlaylistTagsHtml(track.id)}
         ${statusRowHtml}
         ${
           track.popularity != null
@@ -989,6 +1152,9 @@ function listTracksHtml(rows: DisplayRow[], canEdit: boolean): string {
 }
 
 let groupedGridSepObserver: ResizeObserver | null = null
+let detailStickyObserver: IntersectionObserver | null = null
+let detailStickyResizeObserver: ResizeObserver | null = null
+let detailStickyGlassHost: HTMLElement | null = null
 
 function syncGroupedGridSeparators(grid: HTMLElement): void {
   const entries = [...grid.querySelectorAll<HTMLElement>('.album-grid-entry')]
@@ -1475,6 +1641,80 @@ function bindTagToggles(
   })
 }
 
+function setDetailToolbarCollapsed(
+  root: HTMLElement,
+  collapsed: boolean
+): void {
+  detailToolbarCollapsed = collapsed
+  localStorage.setItem(TOOLBAR_COLLAPSED_STORAGE_KEY, collapsed ? '1' : '0')
+  const sticky = root.querySelector<HTMLElement>('.detail-tracks-sticky')
+  sticky?.classList.toggle('is-collapsed', collapsed)
+  if (collapsed) closeDetailMenus(root)
+}
+
+function syncDetailStickyHeight(sticky: HTMLElement, shell: HTMLElement | null): void {
+  const h = `${sticky.offsetHeight}px`
+  sticky.style.setProperty('--detail-sticky-h', h)
+  shell?.style.setProperty('--detail-sticky-h', h)
+}
+
+function bindDetailToolbarCollapse(root: HTMLElement): void {
+  const sticky = root.querySelector<HTMLElement>('.detail-tracks-sticky')
+  const expandBtn = root.querySelector<HTMLButtonElement>('#detail-toolbar-expand-btn')
+  const collapseBtn = root.querySelector<HTMLButtonElement>('#detail-toolbar-collapse-btn')
+  if (!sticky) return
+
+  expandBtn?.addEventListener('click', () => {
+    setDetailToolbarCollapsed(root, false)
+  })
+  collapseBtn?.addEventListener('click', () => {
+    setDetailToolbarCollapsed(root, true)
+  })
+}
+
+function bindDetailStickyBar(root: HTMLElement): void {
+  const sentinel = root.querySelector<HTMLElement>('.detail-sticky-sentinel')
+  const sticky = root.querySelector<HTMLElement>('.detail-tracks-sticky')
+  const shell = root.querySelector<HTMLElement>('.detail-shell')
+  if (!sentinel || !sticky) return
+
+  const setStuck = (stuck: boolean): void => {
+    sticky.classList.toggle('is-stuck', stuck)
+    shell?.classList.toggle('detail-toolbar-stuck', stuck)
+
+    if (stuck) {
+      if (detailStickyGlassHost !== sticky) {
+        mountBarGlass(sticky)
+        detailStickyGlassHost = sticky
+      }
+      syncDetailStickyHeight(sticky, shell)
+      detailStickyResizeObserver?.disconnect()
+      detailStickyResizeObserver = new ResizeObserver(() => {
+        syncDetailStickyHeight(sticky, shell)
+      })
+      detailStickyResizeObserver.observe(sticky)
+    } else {
+      detailStickyResizeObserver?.disconnect()
+      detailStickyResizeObserver = null
+      if (detailStickyGlassHost === sticky) {
+        unmountBarGlass()
+        detailStickyGlassHost = null
+      }
+      sticky.style.removeProperty('--detail-sticky-h')
+      shell?.style.removeProperty('--detail-sticky-h')
+    }
+  }
+
+  detailStickyObserver?.disconnect()
+  detailStickyObserver = new IntersectionObserver(
+    ([entry]) => {
+      setStuck(!entry.isIntersecting)
+    },
+    { threshold: 0 }
+  )
+  detailStickyObserver.observe(sentinel)
+}
+
 function bindGroupMenu(
   root: HTMLElement,
   playlist: SpotifyPlaylist,
@@ -1661,6 +1901,7 @@ function bindDetectDuplicates(root: HTMLElement): void {
       playlistId: ctx.playlist.id,
       market: ctx.market,
       canEdit: ctx.canEdit,
+      entries: ctx.entries,
       onFound: (groups, ids) => {
         highlightedDuplicateIds = ids
         renderPlaylistDetail(
@@ -1738,6 +1979,22 @@ function bindAddToCart(root: HTMLElement): void {
       showDetailNotice(root, `Added “${entry.track.name}” to cart.`)
     }
     updateCartButtons(root)
+  })
+}
+
+function bindOwnPlaylistTags(root: HTMLElement): void {
+  if (ownPlaylistTagsClickBound) return
+  ownPlaylistTagsClickBound = true
+
+  root.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(
+      '.track-playlist-tag[data-open-playlist]'
+    )
+    if (!btn) return
+    e.preventDefault()
+    e.stopPropagation()
+    const playlistId = btn.dataset.openPlaylist
+    if (playlistId) detailViewOpts.onOpenPlaylist?.(playlistId)
   })
 }
 
@@ -1831,9 +2088,15 @@ export function renderPlaylistDetail(
 ): void {
   if (opts) detailViewOpts = opts
   stopPreview()
+  detailStickyObserver?.disconnect()
+  detailStickyResizeObserver?.disconnect()
+  if (detailStickyGlassHost) {
+    unmountBarGlass()
+    detailStickyGlassHost = null
+  }
   resetSortState(playlist.id)
 
-  const canEdit = kind !== 'followed'
+  const canEdit = kind !== 'followed' && kind !== 'liked'
   detailReplaceCtx = {
     playlist,
     entries,
@@ -1870,7 +2133,6 @@ export function renderPlaylistDetail(
 
   root.innerHTML = `
     <div class="shell detail-shell ${viewMode === 'grid' ? 'detail-shell-grid' : ''}">
-      ${viewMode === 'grid' ? previewSettingsControlsHtml() : ''}
       <button type="button" class="btn-back" id="back-btn">← Back to playlists</button>
 
       <header class="detail-header">
@@ -1898,23 +2160,47 @@ export function renderPlaylistDetail(
       </header>
 
       <div class="detail-tracks-wrap">
-        <div class="detail-tracks-toolbar">
+        <div class="detail-sticky-sentinel" aria-hidden="true"></div>
+        <div class="detail-tracks-sticky${detailToolbarCollapsed ? ' is-collapsed' : ''}">
+          <button
+            type="button"
+            class="detail-toolbar-collapsed-btn"
+            id="detail-toolbar-expand-btn"
+            title="Show controls"
+            aria-label="Show controls"
+          >
+            Controls
+            <span class="detail-toolbar-expand-hint" aria-hidden="true">▾</span>
+          </button>
+          <div class="detail-tracks-toolbar">
+            <button
+              type="button"
+              class="detail-toolbar-collapse-btn"
+              id="detail-toolbar-collapse-btn"
+              title="Hide controls"
+              aria-label="Hide controls"
+            >◂</button>
+            <div class="detail-toolbar-body" id="detail-toolbar-body">
           <div class="detail-toolbar-leading">
             <div class="detail-view-toggle" role="tablist" aria-label="Track view mode">
               <button
                 type="button"
-                class="view-mode-btn ${viewMode === 'list' ? 'active' : ''}"
+                class="view-mode-btn btn-icon ${viewMode === 'list' ? 'active' : ''}"
                 data-mode="list"
                 role="tab"
                 aria-selected="${viewMode === 'list'}"
-              >List</button>
+                aria-label="List view"
+                title="List view"
+              >${iconList(18)}</button>
               <button
                 type="button"
-                class="view-mode-btn ${viewMode === 'grid' ? 'active' : ''}"
+                class="view-mode-btn btn-icon ${viewMode === 'grid' ? 'active' : ''}"
                 data-mode="grid"
                 role="tab"
                 aria-selected="${viewMode === 'grid'}"
-              >Grid</button>
+                aria-label="Grid view"
+                title="Grid view"
+              >${iconGrid(18)}</button>
             </div>
             ${trackSearchHtml()}
           </div>
@@ -1924,30 +2210,38 @@ export function renderPlaylistDetail(
                 ? `
             <button
               type="button"
-              class="btn-refresh"
+              class="btn-refresh btn-icon"
               id="refresh-playlist-btn"
               ${playlistDetailRefreshing ? 'disabled' : ''}
               aria-busy="${playlistDetailRefreshing}"
+              aria-label="${playlistDetailRefreshing ? 'Refreshing playlist' : 'Refresh playlist'}"
               title="Fetch latest tracks from Spotify"
-            >${playlistDetailRefreshing ? 'Refreshing…' : 'Refresh'}</button>
+            >${iconRefresh(18)}</button>
             `
                 : ''
             }
             <button
               type="button"
-              class="btn-detect-duplicates"
+              class="btn-detect-duplicates btn-icon pill-btn"
               id="detect-duplicates-btn"
+              aria-label="Detect duplicates"
               title="Find remixes, deluxe, live, and remastered versions of the same song"
-            >Detect duplicates</button>
+            >${iconDuplicates(18)}</button>
             ${tagTogglesHtml()}
             ${gridSizeControlsHtml()}
             ${groupMenuHtml()}
             ${sortMenuHtml()}
+            ${viewMode === 'grid' ? previewSettingsControlsHtml() : ''}
+          </div>
+            </div>
           </div>
         </div>
+        <div class="detail-tracks-body">
         ${trackSearchMetaHtml(displayRows.length, totalTrackCount)}
+        ${likedPlaylistTagsStatusHtml()}
         ${duplicatesBannerHtml()}
         ${tracksSection(displayRows, null, canEdit, totalTrackCount)}
+        </div>
       </div>
     </div>
   `
@@ -1984,6 +2278,8 @@ export function renderPlaylistDetail(
     onBack,
     onTracksUpdated
   )
+  bindDetailStickyBar(root)
+  bindDetailToolbarCollapse(root)
   bindGroupMenu(root, playlist, entries, kind, market, onBack, onTracksUpdated)
   bindSortMenu(root, playlist, entries, kind, market, onBack, onTracksUpdated)
   bindTagToggles(root, playlist, entries, kind, market, onBack, onTracksUpdated)
@@ -1991,7 +2287,27 @@ export function renderPlaylistDetail(
   bindDetectDuplicates(root)
   bindTrackReplace(root)
   bindAddToCart(root)
+  bindOwnPlaylistTags(root)
   updateCartButtons(root)
+
+  ensureOwnPlaylistTrackIndex(
+    root,
+    playlist,
+    entries,
+    kind,
+    market,
+    onBack,
+    onTracksUpdated
+  )
+  ensureLikedTrackIds(
+    root,
+    playlist,
+    entries,
+    kind,
+    market,
+    onBack,
+    onTracksUpdated
+  )
 
   if (viewMode === 'grid' && displayRows.length) {
     if (groupByMode !== 'none') {

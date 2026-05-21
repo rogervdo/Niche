@@ -1,6 +1,6 @@
 import { playPreview, stopPreview, unlockPreviewAudio } from './previewPlayer'
 import { IMAGE_SIZES, renderImg } from '../spotify/images'
-import { getPlaylistTrackEntries, spotifyErrorMessage, spotifyTrackOpenUrl } from '../spotify/api'
+import { spotifyErrorMessage, spotifyTrackOpenUrl } from '../spotify/api'
 import { removePlaylistEntryAtPosition } from '../spotify/playlistEdit'
 import {
   duplicateTrackIds,
@@ -407,12 +407,15 @@ export function runDuplicateDetectFlow(opts: {
   playlistId: string
   market: string
   canEdit: boolean
+  /** Tracks already loaded in the detail view (required for Liked Songs synthetic id). */
+  entries: PlaylistTrackEntry[]
   onFound: (groups: DuplicateGroup[], highlightedIds: Set<string>) => void
   onNone: () => void
   onRemoveUpdate: (entries: PlaylistTrackEntry[], groups: DuplicateGroup[]) => void
   onError: (message: string) => void
 }): void {
-  const { playlistId, market, canEdit, onFound, onNone, onRemoveUpdate, onError } = opts
+  const { playlistId, market, canEdit, entries: initialEntries, onFound, onNone, onRemoveUpdate, onError } =
+    opts
 
   const closeModalRef = { current: () => {} }
 
@@ -443,14 +446,7 @@ export function runDuplicateDetectFlow(opts: {
 
   window.setTimeout(() => {
     void (async () => {
-      let entries: PlaylistTrackEntry[]
-      try {
-        entries = await getPlaylistTrackEntries(playlistId, market)
-      } catch (e) {
-        closeModalRef.current()
-        onError(spotifyErrorMessage(e))
-        return
-      }
+      const entries = initialEntries
 
       const groups = findDuplicateGroups(entries)
 

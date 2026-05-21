@@ -1,8 +1,8 @@
 import { tuningToAnalyser } from './previewVisualizerTuning'
 
 const PREVIEW_DURATION_MS = 20_000
-/** Playback level for 30s Spotify previews (1.0 = full; 0.8 ≈ 20% quieter). */
-const PREVIEW_VOLUME = 0.8
+/** Playback level for 30s Spotify previews (1.0 = full; 0.72 ≈ 28% quieter). */
+const PREVIEW_VOLUME = 0.72
 
 const audioBlobUrlBySource = new Map<string, string>()
 const audioFetchInFlight = new Map<string, Promise<string>>()

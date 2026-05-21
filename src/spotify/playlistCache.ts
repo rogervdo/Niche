@@ -1,7 +1,13 @@
 import type { PlaylistTrackEntry, SpotifyPlaylist, SpotifyTrack } from './types'
 
+import { clearLikedTracksCache } from './likedTracksCache'
+import { clearTrackMetaCache } from './trackMetaCache'
+
 const PLAYLISTS_KEY = 'niche_playlists_cache_v1'
 const TRACKS_KEY = 'niche_tracks_cache_v1'
+const TRACKS_LOCAL_KEY = 'niche_tracks_cache_local_v1'
+const TRACK_IDS_KEY = 'niche_playlist_track_ids_v1'
+export const PLAYLIST_CACHE_TTL_MS = 24 * 60 * 60 * 1000
 
 interface PlaylistsCacheEntry {
   userId: string
@@ -22,6 +28,11 @@ interface TracksCacheStore {
 
 let memoryPlaylists: PlaylistsCacheEntry | null = null
 let memoryTracks: TracksCacheStore | null = null
+let memoryTrackIds: TrackIdsCacheStore | null = null
+
+type TrackIdsCacheStore = {
+  [key: string]: { trackIds: string[]; fetchedAt: number }
+}
 
 function tracksKey(playlistId: string, market: string): string {
   return `${playlistId}:${market}`
@@ -50,25 +61,52 @@ function writePlaylists(entry: PlaylistsCacheEntry): void {
   }
 }
 
+function readTracksStoreFrom(storage: Storage, key: string): TracksCacheStore {
+  try {
+    const raw = storage.getItem(key)
+    return raw ? (JSON.parse(raw) as TracksCacheStore) : {}
+  } catch {
+    return {}
+  }
+}
+
 function readTracksStore(): TracksCacheStore {
   if (memoryTracks) return memoryTracks
-  try {
-    const raw = sessionStorage.getItem(TRACKS_KEY)
-    memoryTracks = raw ? (JSON.parse(raw) as TracksCacheStore) : {}
-    return memoryTracks
-  } catch {
-    memoryTracks = {}
-    return memoryTracks
+
+  const session = readTracksStoreFrom(sessionStorage, TRACKS_KEY)
+  const local = readTracksStoreFrom(localStorage, TRACKS_LOCAL_KEY)
+  const merged: TracksCacheStore = { ...local }
+
+  for (const [k, sessionEntry] of Object.entries(session)) {
+    const localEntry = merged[k]
+    if (!localEntry || sessionEntry.fetchedAt >= localEntry.fetchedAt) {
+      merged[k] = sessionEntry
+    }
   }
+
+  memoryTracks = merged
+  return merged
 }
 
 function writeTracksStore(store: TracksCacheStore): void {
   memoryTracks = store
+  const payload = JSON.stringify(store)
   try {
-    sessionStorage.setItem(TRACKS_KEY, JSON.stringify(store))
+    sessionStorage.setItem(TRACKS_KEY, payload)
   } catch {
     /* quota or private mode */
   }
+  try {
+    localStorage.setItem(TRACKS_LOCAL_KEY, payload)
+  } catch {
+    /* quota */
+  }
+}
+
+function isTracksEntryFresh(
+  entry: TracksCacheStore[string] | undefined
+): boolean {
+  return Boolean(entry && Date.now() - entry.fetchedAt < PLAYLIST_CACHE_TTL_MS)
 }
 
 export function getCachedPlaylists(userId: string): SpotifyPlaylist[] | null {
@@ -106,7 +144,9 @@ export function getCachedPlaylistEntries(
   playlistId: string,
   market: string
 ): PlaylistTrackEntry[] | null {
-  const entry = readTracksStore()[tracksKey(playlistId, market)]
+  const key = tracksKey(playlistId, market)
+  const entry = readTracksStore()[key]
+  if (!isTracksEntryFresh(entry)) return null
   if (!entry?.positions || entry.positions.length !== entry.tracks.length) {
     return null
   }
@@ -116,6 +156,57 @@ export function getCachedPlaylistEntries(
     uri: track.uri ?? `spotify:track:${track.id}`,
     addedAt: entry.addedAt?.[i] ?? null,
   }))
+}
+
+function readTrackIdsStore(): TrackIdsCacheStore {
+  if (memoryTrackIds) return memoryTrackIds
+  try {
+    const raw = localStorage.getItem(TRACK_IDS_KEY)
+    memoryTrackIds = raw ? (JSON.parse(raw) as TrackIdsCacheStore) : {}
+    return memoryTrackIds
+  } catch {
+    memoryTrackIds = {}
+    return memoryTrackIds
+  }
+}
+
+function writeTrackIdsStore(store: TrackIdsCacheStore): void {
+  memoryTrackIds = store
+  try {
+    localStorage.setItem(TRACK_IDS_KEY, JSON.stringify(store))
+  } catch {
+    /* quota */
+  }
+}
+
+export function getCachedPlaylistTrackIds(
+  playlistId: string,
+  market: string
+): string[] | null {
+  const entry = readTracksStore()[tracksKey(playlistId, market)]
+  if (entry && Date.now() - entry.fetchedAt < PLAYLIST_CACHE_TTL_MS) {
+    return entry.tracks.map((t) => t.id)
+  }
+
+  const idEntry = readTrackIdsStore()[tracksKey(playlistId, market)]
+  if (idEntry && Date.now() - idEntry.fetchedAt < PLAYLIST_CACHE_TTL_MS) {
+    return idEntry.trackIds
+  }
+
+  return null
+}
+
+export function setCachedPlaylistTrackIds(
+  playlistId: string,
+  market: string,
+  trackIds: string[]
+): void {
+  const store = readTrackIdsStore()
+  store[tracksKey(playlistId, market)] = {
+    trackIds,
+    fetchedAt: Date.now(),
+  }
+  writeTrackIdsStore(store)
 }
 
 export function setCachedEntries(
@@ -131,6 +222,11 @@ export function setCachedEntries(
     fetchedAt: Date.now(),
   }
   writeTracksStore(store)
+  setCachedPlaylistTrackIds(
+    playlistId,
+    market,
+    entries.map((e) => e.track.id)
+  )
 }
 
 export function setCachedTracks(
@@ -152,9 +248,14 @@ export function setCachedTracks(
 export function clearPlaylistCache(): void {
   memoryPlaylists = null
   memoryTracks = null
+  memoryTrackIds = null
+  clearTrackMetaCache()
+  clearLikedTracksCache()
   try {
     sessionStorage.removeItem(PLAYLISTS_KEY)
     sessionStorage.removeItem(TRACKS_KEY)
+    localStorage.removeItem(TRACKS_LOCAL_KEY)
+    localStorage.removeItem(TRACK_IDS_KEY)
   } catch {
     /* ignore */
   }

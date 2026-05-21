@@ -1,8 +1,8 @@
 let active: { remove: () => void } | null = null
 
 /** Frosted backdrop + sheen (no displacement / mirror strips). */
-export function mountCartGlass(bar: HTMLElement): void {
-  unmountCartGlass()
+export function mountBarGlass(bar: HTMLElement): void {
+  unmountBarGlass()
 
   const computed = getComputedStyle(bar)
   if (computed.position === 'static') bar.style.position = 'relative'
@@ -26,7 +26,13 @@ export function mountCartGlass(bar: HTMLElement): void {
   }
 }
 
-export function unmountCartGlass(): void {
+export function unmountBarGlass(): void {
   active?.remove()
   active = null
 }
+
+/** @deprecated Use mountBarGlass */
+export const mountCartGlass = mountBarGlass
+
+/** @deprecated Use unmountBarGlass */
+export const unmountCartGlass = unmountBarGlass

@@ -7,6 +7,7 @@ import { ensureDb } from './middleware/ensureDb.js'
 import { authRouter } from './routes/auth.js'
 import { adminRouter, discoverRouter } from './routes/discover.js'
 import { previewRouter } from './routes/preview.js'
+import { cacheRouter } from './routes/cache.js'
 import { usersRouter } from './routes/users.js'
 
 const isVercel = Boolean(process.env.VERCEL)
@@ -21,6 +22,7 @@ function createApiRouter(): Router {
   api.use('/preview', previewRouter)
   api.use('/auth', authRouter)
   api.use('/users', ensureDb, usersRouter)
+  api.use('/cache', ensureDb, cacheRouter)
   api.use('/discover', ensureDb, discoverRouter)
   api.use('/admin', ensureDb, adminRouter)
 

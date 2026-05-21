@@ -115,10 +115,11 @@ Or install locally: `brew install mongodb-community` then `brew services start m
 - Filter by type (all / yours / collaborative / followed)
 - Sort playlists (library order, name, track count, owner, type, public/collaborative)
 - Adjustable grid tile size and refresh from Spotify
+- **MongoDB cache** (when the backend + MongoDB are running): playlist library, per-playlist tracks (including Liked Songs), liked-song membership, enriched track metadata (popularity, etc.), and audio features are stored server-side for 24 hours. The browser keeps a fast local mirror; Spotify is only called on cache miss or refresh.
 
 ### Playlist detail
 
-- **List** and **album-art grid** views
+- **List** and **album-art grid** views (heart icon shows whether each track is in Liked Songs)
 - Sort tracks by playlist order, artist, album, popularity, release date, duration, tempo, valence, danceability, or acousticness (audio sorts load Spotify audio features on demand)
 - **30-second previews** on hover (Spotify embed proxy; optional backend preview route when running the API)
 - **Detect duplicates** — finds multiple versions of the same song (remix, live, deluxe, remaster, etc.), highlights them in the track list, and lets you remove extras

@@ -1,3 +1,8 @@
+import {
+  getCachedPreviewUrl,
+  setCachedPreviewUrl,
+} from './trackMetaCache'
+
 const resolvedCache = new Map<string, string | null>()
 const inFlight = new Map<string, Promise<string | null>>()
 
@@ -51,6 +56,12 @@ async function fetchPreviewFromEmbed(trackId: string): Promise<string | null> {
 }
 
 async function resolvePreviewUrlParallel(trackId: string): Promise<string | null> {
+  const persisted = getCachedPreviewUrl(trackId)
+  if (persisted !== undefined) {
+    resolvedCache.set(trackId, persisted)
+    return persisted
+  }
+
   const cached = resolvedCache.get(trackId)
   if (cached !== undefined) return cached
 
@@ -64,6 +75,7 @@ async function resolvePreviewUrlParallel(trackId: string): Promise<string | null
     ])
     const url = backend ?? embed ?? null
     resolvedCache.set(trackId, url)
+    setCachedPreviewUrl(trackId, url)
     return url
   })().finally(() => {
     inFlight.delete(trackId)
@@ -83,6 +95,7 @@ export async function resolvePreviewUrl(
 
   if (apiPreviewUrl) {
     resolvedCache.set(trackId, apiPreviewUrl)
+    setCachedPreviewUrl(trackId, apiPreviewUrl)
     return apiPreviewUrl
   }
   return resolvePreviewUrlParallel(trackId)

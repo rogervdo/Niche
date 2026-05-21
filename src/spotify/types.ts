@@ -129,6 +129,17 @@ export interface PlaylistTracksPage {
   total: number
 }
 
+export interface SavedTrackItem {
+  added_at: string
+  track: SpotifyTrack | null
+}
+
+export interface SavedTracksPage {
+  items: SavedTrackItem[]
+  total: number
+  next: string | null
+}
+
 export interface TokenResponse {
   access_token: string
   token_type: string
