@@ -37,6 +37,7 @@ import {
 } from './spotify/playlistCache'
 import type { PlaylistTrackEntry } from './spotify/types'
 import { mountCartUI, unmountCartUI } from './cart/ui'
+import { mountChatUI, unmountChatUI } from './chat/widget'
 import { renderDiscoverView } from './discover/view'
 import {
   renderPlaylistDetail,
@@ -131,6 +132,7 @@ let displayName = ''
 let userImages: SpotifyImage[] | null = null
 let userMarket = 'US'
 let currentView: AppView = 'dashboard'
+let activeDetailPlaylistId: string | null = null
 let playlistsRefreshing = false
 let likedSongsTotal: number | null = null
 
@@ -493,12 +495,14 @@ function playlistCard(p: SpotifyPlaylist): string {
 
 function openDiscover(): void {
   currentView = 'discover'
+  activeDetailPlaylistId = null
   void renderDiscoverView(
     app,
     userId,
     userMarket,
     () => {
       currentView = 'dashboard'
+      activeDetailPlaylistId = null
       renderDashboard()
     },
     (playlistId) => {
@@ -624,6 +628,7 @@ function likedSongsCardHtml(): string {
 
 async function openLikedSongs(): Promise<void> {
   currentView = 'detail'
+  activeDetailPlaylistId = LIKED_SONGS_PLAYLIST_ID
   const playlistId = LIKED_SONGS_PLAYLIST_ID
 
   const cachedEntries = getCachedPlaylistEntries(playlistId, userMarket)
@@ -638,6 +643,7 @@ async function openLikedSongs(): Promise<void> {
       userMarket,
       () => {
         currentView = 'dashboard'
+        activeDetailPlaylistId = null
         renderDashboard()
       },
       (updated) => {
@@ -663,6 +669,7 @@ async function openLikedSongs(): Promise<void> {
       userMarket,
       () => {
         currentView = 'dashboard'
+        activeDetailPlaylistId = null
         renderDashboard()
       },
       (updated) => {
@@ -673,6 +680,7 @@ async function openLikedSongs(): Promise<void> {
     )
   } catch (e) {
     currentView = 'dashboard'
+    activeDetailPlaylistId = null
     renderDashboard()
     showError(e)
   }
@@ -705,6 +713,7 @@ async function openPlaylist(playlistId: string): Promise<void> {
   }
 
   currentView = 'detail'
+  activeDetailPlaylistId = playlistId
 
   const cachedEntries = getCachedPlaylistEntries(playlistId, userMarket)
   if (cachedEntries) {
@@ -716,6 +725,7 @@ async function openPlaylist(playlistId: string): Promise<void> {
       userMarket,
       () => {
         currentView = 'dashboard'
+        activeDetailPlaylistId = null
         renderDashboard()
       },
       (updated) => {
@@ -739,6 +749,7 @@ async function openPlaylist(playlistId: string): Promise<void> {
       userMarket,
       () => {
         currentView = 'dashboard'
+        activeDetailPlaylistId = null
         renderDashboard()
       },
       (updated) => {
@@ -749,6 +760,7 @@ async function openPlaylist(playlistId: string): Promise<void> {
     )
   } catch (e) {
     currentView = 'dashboard'
+    activeDetailPlaylistId = null
     renderDashboard()
     showError(e)
   }
@@ -856,6 +868,7 @@ function bindPlaylistSortMenu(root: HTMLElement): void {
 
 function renderDashboard(): void {
   currentView = 'dashboard'
+  activeDetailPlaylistId = null
   const visible = sortPlaylists(filteredPlaylists())
 
   app.innerHTML = `
@@ -959,6 +972,7 @@ function renderDashboard(): void {
     clearStoredTagIndex()
     resetPlaylistCacheApiProbe()
     unmountCartUI()
+    unmountChatUI()
     playlists = []
     likedSongsTotal = null
     userImages = null
@@ -1087,6 +1101,18 @@ async function boot(): Promise<void> {
         if (currentView === 'dashboard') renderDashboard()
       },
       openPlaylist: (id) => void openPlaylist(id),
+    })
+
+    mountChatUI({
+      getContextInput: () => ({
+        userId,
+        displayName,
+        market: userMarket,
+        view: currentView,
+        playlists,
+        activeDetailPlaylistId,
+        likedSongsTotal,
+      }),
     })
 
     const cached = getCachedPlaylists(userId)

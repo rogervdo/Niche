@@ -40,6 +40,8 @@ function getSpotifyConfig() {
 
 export const config = {
   port: Number(process.env.PORT ?? 3001),
+  geminiApiKey: process.env.GEMINI_API_KEY ?? '',
+  geminiModel: process.env.GEMINI_MODEL ?? 'gemini-3.1-flash-lite-preview',
   databaseUrl: process.env.DATABASE_URL ?? 'mongodb://localhost:27017/niche',
   get spotify() {
     return getSpotifyConfig()

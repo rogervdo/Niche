@@ -9,6 +9,7 @@ import { adminRouter, discoverRouter } from './routes/discover.js'
 import { previewRouter } from './routes/preview.js'
 import { cacheRouter } from './routes/cache.js'
 import { usersRouter } from './routes/users.js'
+import { chatRouter } from './routes/chat.js'
 
 const isVercel = Boolean(process.env.VERCEL)
 
@@ -25,6 +26,7 @@ function createApiRouter(): Router {
   api.use('/cache', ensureDb, cacheRouter)
   api.use('/discover', ensureDb, discoverRouter)
   api.use('/admin', ensureDb, adminRouter)
+  api.use('/chat', chatRouter)
 
   return api
 }
