@@ -1,6 +1,8 @@
 import { sendChatMessage, type ChatHistoryItem } from './client'
 import { buildLibraryContext, type ChatContextInput } from './context'
+import { clearTasteProfileCache } from './tasteProfile'
 import { renderChatMarkdown } from './markdown'
+import { prefetchTasteProfile } from './tasteProfile'
 
 const CHAT_SIZE_KEY = 'niche_chat_size'
 const DEFAULT_SIZE = { width: 352, height: 416 }
@@ -215,7 +217,7 @@ async function submitMessage(
   renderMessages(messagesEl)
 
   try {
-    const context = buildLibraryContext(ctx.getContextInput())
+    const context = await buildLibraryContext(ctx.getContextInput())
     const history = messages.slice(0, -1)
     const reply = await sendChatMessage(text, context, history)
     messages.push({ role: 'model', text: reply })
@@ -239,11 +241,13 @@ export function mountChatUI(context: ChatUiContext): void {
   rootEl.id = 'niche-chat-widget'
   document.body.appendChild(rootEl)
   window.addEventListener('resize', onWindowResize)
+  prefetchTasteProfile()
   renderPanel()
 }
 
 export function unmountChatUI(): void {
   window.removeEventListener('resize', onWindowResize)
+  clearTasteProfileCache()
   rootEl?.remove()
   rootEl = null
   ctx = null

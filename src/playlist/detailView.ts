@@ -1502,6 +1502,14 @@ function bindGridPreview(
   const selectTrack = (index: number, pin: boolean): void => {
     unlockPreviewAudio()
     if (pin) pinnedIndex = index
+    if (
+      pin &&
+      activeIndex === index &&
+      (lastPanelStatus === 'playing' || lastPanelStatus === 'loading')
+    ) {
+      updatePanel(index, lastPanelStatus)
+      return
+    }
     void (async () => {
       const token = ++hoverToken
       const track = rows[index]?.track
@@ -1520,8 +1528,13 @@ function bindGridPreview(
       }
 
       updatePanel(index, 'playing')
-      const ok = await playPreview(previewUrl)
-      if (token !== hoverToken) return
+      const ok = await playPreview(previewUrl, {
+        isCancelled: () => token !== hoverToken,
+      })
+      if (token !== hoverToken) {
+        stopPreview()
+        return
+      }
 
       if (!ok) {
         updatePanel(index, 'error', getPreviewError() ?? 'Could not play preview')

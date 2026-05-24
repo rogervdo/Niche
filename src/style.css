@@ -1762,6 +1762,7 @@ code {
 }
 
 .detail-sort-menu {
+  display: none;
   position: absolute;
   top: calc(100% + 0.35rem);
   right: 0;
@@ -1776,7 +1777,7 @@ code {
   box-shadow: 0 12px 40px #00000066;
 }
 
-.detail-sort[data-sort-open='true'] .detail-sort-menu {
+.detail-sort[data-sort-open='true'] .detail-sort-menu:not([hidden]) {
   display: block;
 }
 
@@ -3678,5 +3679,331 @@ body.has-cart-bar-collapsed {
     right: 0.85rem;
     bottom: 0.85rem;
   }
+}
+
+/* Listening stats (Stats-for-Spotify style) */
+.stats-shell {
+  max-width: 720px;
+}
+
+.stats-header {
+  text-align: center;
+  margin-bottom: 1.5rem;
+}
+
+.stats-title {
+  margin: 0;
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.stats-toggle-panel {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 0.65rem;
+  margin-bottom: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.stats-toggle-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: center;
+}
+
+.stats-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.85rem;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  pointer-events: auto;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.stats-toggle-btn svg {
+  pointer-events: none;
+}
+
+.stats-toggle-btn:hover {
+  color: var(--text);
+}
+
+.stats-toggle-btn.active {
+  background: var(--surface-2);
+  color: var(--accent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.stats-list-wrap {
+  min-height: 12rem;
+}
+
+.stats-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 3rem 1rem;
+  color: var(--muted);
+}
+
+.stats-empty,
+.stats-error {
+  text-align: center;
+  color: var(--muted);
+  padding: 2rem 1rem;
+}
+
+.stats-error {
+  color: var(--error);
+}
+
+.stats-error-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  padding: 2rem 1rem;
+}
+
+.stats-rank-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.stats-rank-row {
+  display: grid;
+  grid-template-columns: 2rem 48px 1fr auto auto;
+  align-items: center;
+  gap: 0.75rem 1rem;
+  padding: 0.65rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.stats-rank-row-genre {
+  grid-template-columns: 2rem 1fr;
+}
+
+.stats-rank-num {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--muted);
+  text-align: right;
+}
+
+.stats-rank-art {
+  width: 48px;
+  height: 48px;
+  border-radius: 4px;
+  object-fit: cover;
+  background: var(--surface-2);
+}
+
+.stats-rank-meta {
+  min-width: 0;
+}
+
+.stats-rank-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stats-rank-sub {
+  margin: 0.15rem 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stats-played-at {
+  font-size: 0.8rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.stats-spotify-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  color: var(--accent);
+  opacity: 0.85;
+  transition: opacity 0.15s;
+}
+
+.stats-spotify-link:hover {
+  opacity: 1;
+}
+
+@media (max-width: 520px) {
+  .stats-rank-row {
+    grid-template-columns: 1.75rem 40px 1fr auto;
+    gap: 0.5rem 0.65rem;
+  }
+
+  .stats-played-at {
+    grid-column: 3;
+    justify-self: start;
+    margin-top: -0.25rem;
+  }
+
+  .stats-spotify-link {
+    grid-row: 1 / span 2;
+    grid-column: 4;
+  }
+
+  .stats-rank-art {
+    width: 40px;
+    height: 40px;
+  }
+}
+
+/* Listening browse (Top / Recently played) */
+.listening-page-shell {
+  max-width: 720px;
+}
+
+.listening-page-shell.listening-page-wide {
+  max-width: 1400px;
+}
+
+.listening-page-body {
+  position: relative;
+  z-index: 1;
+  margin-top: 0.5rem;
+}
+
+.listening-browse-toolbar {
+  margin-bottom: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.listening-split-layout .listening-list-column {
+  min-width: 0;
+}
+
+.listening-browse-list .listening-detail-panel {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.listening-track-row {
+  cursor: pointer;
+}
+
+.listening-track-row.listening-row-selected {
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+.listening-track-row.listening-row-selected:hover {
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+}
+
+.track-open-static {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 0.75rem;
+  align-items: center;
+  min-width: 0;
+  color: inherit;
+}
+
+.listening-grid-layout {
+  margin-top: 0.25rem;
+}
+
+.listening-track-row .listening-row-spotify {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* Top genres — horizontal bar chart (Stats-for-Spotify style) */
+.listening-browse-genres .listening-browse-toolbar {
+  margin-bottom: 1rem;
+}
+
+.genre-bar-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.genre-bar-row {
+  display: grid;
+  grid-template-columns: 2rem 1fr;
+  gap: 0.5rem 0.75rem;
+  align-items: start;
+}
+
+.genre-bar-rank {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-align: right;
+  padding-top: 0.1rem;
+}
+
+.genre-bar-main {
+  min-width: 0;
+}
+
+.genre-bar-name {
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text);
+  margin-bottom: 0.35rem;
+  line-height: 1.2;
+}
+
+.genre-bar-track {
+  height: 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--border) 55%, var(--surface));
+  overflow: hidden;
+}
+
+.genre-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #2563eb, #3b82f6);
+  min-width: 4px;
+  transition: width 0.35s ease;
 }
 

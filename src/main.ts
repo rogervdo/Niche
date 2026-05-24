@@ -39,6 +39,8 @@ import type { PlaylistTrackEntry } from './spotify/types'
 import { mountCartUI, unmountCartUI } from './cart/ui'
 import { mountChatUI, unmountChatUI } from './chat/widget'
 import { renderDiscoverView } from './discover/view'
+import { renderRecentView } from './listening/recentView'
+import { disposeTopView, renderTopView } from './listening/topView'
 import {
   renderPlaylistDetail,
   type PlaylistDetailOpts,
@@ -70,7 +72,7 @@ import type { SpotifyPlaylist } from './spotify/types'
 const app = document.querySelector<HTMLDivElement>('#app')!
 
 type Filter = 'all' | PlaylistKind | 'archived'
-type AppView = 'dashboard' | 'discover' | 'detail'
+type AppView = 'dashboard' | 'discover' | 'detail' | 'top' | 'recent'
 
 type PlaylistSortMode =
   | 'library'
@@ -512,6 +514,33 @@ function openDiscover(): void {
   )
 }
 
+function openTop(): void {
+  currentView = 'top'
+  activeDetailPlaylistId = null
+  void renderTopView(app, () => {
+    disposeTopView()
+    currentView = 'dashboard'
+    activeDetailPlaylistId = null
+    renderDashboard()
+  })
+}
+
+function openRecent(): void {
+  currentView = 'recent'
+  activeDetailPlaylistId = null
+  void renderRecentView(
+    app,
+    () => {
+      currentView = 'dashboard'
+      activeDetailPlaylistId = null
+      renderDashboard()
+    },
+    () => {
+      void loginWithSpotify()
+    }
+  )
+}
+
 async function fetchPlaylistEntries(
   playlistId: string,
   force = false
@@ -899,6 +928,8 @@ function renderDashboard(): void {
 
       <div class="nav-tabs">
         <button type="button" class="nav-tab active" disabled>Playlists</button>
+        <button type="button" class="nav-tab" id="top-tab">Top</button>
+        <button type="button" class="nav-tab" id="recent-tab">Recently played</button>
         <button type="button" class="nav-tab" id="discover-tab">Discover Daily</button>
       </div>
 
@@ -960,6 +991,14 @@ function renderDashboard(): void {
       ${showGroupsModal ? manageGroupsModalHtml() : ''}
     </div>
   `
+
+  document.getElementById('top-tab')!.addEventListener('click', () => {
+    openTop()
+  })
+
+  document.getElementById('recent-tab')!.addEventListener('click', () => {
+    openRecent()
+  })
 
   document.getElementById('discover-tab')!.addEventListener('click', () => {
     openDiscover()

@@ -1,4 +1,6 @@
 import { getCartTracks } from '../cart/cart'
+import { appendPlaylistAudioSummaries } from './audioSummary'
+import { formatTasteProfile, getTasteProfile } from './tasteProfile'
 import { classifyPlaylist, LIKED_SONGS_PLAYLIST_ID } from '../spotify/api'
 import { getCachedPlaylistEntries } from '../spotify/playlistCache'
 import type { SpotifyPlaylist } from '../spotify/types'
@@ -9,13 +11,13 @@ export type ChatContextInput = {
   userId: string
   displayName: string
   market: string
-  view: 'dashboard' | 'discover' | 'detail'
+  view: 'dashboard' | 'discover' | 'detail' | 'top' | 'recent'
   playlists: SpotifyPlaylist[]
   activeDetailPlaylistId: string | null
   likedSongsTotal: number | null
 }
 
-export function buildLibraryContext(input: ChatContextInput): string {
+function buildBaseContext(input: ChatContextInput): string[] {
   const lines: string[] = []
   lines.push(`User: ${input.displayName || 'Unknown'}`)
   lines.push(`Screen: ${input.view}`)
@@ -84,6 +86,24 @@ export function buildLibraryContext(input: ChatContextInput): string {
     }
     if (cart.length > 12) lines.push(`  … and ${cart.length - 12} more`)
   }
+
+  return lines
+}
+
+export async function buildLibraryContext(input: ChatContextInput): Promise<string> {
+  const lines = buildBaseContext(input)
+
+  const taste = await getTasteProfile()
+  if (taste) {
+    lines.push(...formatTasteProfile(taste))
+  }
+
+  await appendPlaylistAudioSummaries(lines, {
+    userId: input.userId,
+    market: input.market,
+    playlists: input.playlists,
+    activeDetailPlaylistId: input.activeDetailPlaylistId,
+  })
 
   return lines.join('\n')
 }

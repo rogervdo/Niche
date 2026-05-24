@@ -134,14 +134,30 @@ export function stopPreview(): void {
   notifyPreviewStop()
 }
 
-export async function playPreview(previewUrl: string): Promise<boolean> {
+export type PlayPreviewOptions = {
+  /** When true, abort before starting playback (e.g. hover ended while loading). */
+  isCancelled?: () => boolean
+}
+
+export async function playPreview(
+  previewUrl: string,
+  options?: PlayPreviewOptions
+): Promise<boolean> {
+  const isCancelled = (): boolean => options?.isCancelled?.() ?? false
+
   stopPreview()
+  if (isCancelled()) return false
+
   const audio = ensureAudio()
   let playbackUrl: string
   try {
     playbackUrl = await cachedPlaybackUrl(previewUrl)
   } catch {
     lastError = 'Preview failed to load'
+    stopPreview()
+    return false
+  }
+  if (isCancelled()) {
     stopPreview()
     return false
   }
@@ -176,8 +192,17 @@ export async function playPreview(previewUrl: string): Promise<boolean> {
       })
     }
 
+    if (isCancelled()) {
+      stopPreview()
+      return false
+    }
+
     ensureAnalyser(audio)
     await audio.play()
+    if (isCancelled()) {
+      stopPreview()
+      return false
+    }
     stopTimer = setTimeout(() => stopPreview(), PREVIEW_DURATION_MS)
     return true
   } catch (err) {

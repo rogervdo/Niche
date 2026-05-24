@@ -1,16 +1,18 @@
+import { clearListeningCache } from '../listening/cache'
 import type { TokenResponse } from './types'
 
 const CLIENT_ID = import.meta.env.VITE_SPOTIFY_CLIENT_ID as string
 const REDIRECT_URI = import.meta.env.VITE_REDIRECT_URI as string
 
 /** Bump when scopes change — forces users to reconnect. */
-export const CURRENT_SCOPES_VERSION = '3'
+export const CURRENT_SCOPES_VERSION = '4'
 
 const SCOPES = [
   'playlist-read-private',
   'playlist-read-collaborative',
   'user-read-private',
   'user-top-read',
+  'user-read-recently-played',
   'user-library-read',
   'user-library-modify',
   'playlist-modify-private',
@@ -81,6 +83,7 @@ export function clearAuth(): void {
   sessionStorage.removeItem(TOKENS_KEY)
   sessionStorage.removeItem(VERIFIER_KEY)
   localStorage.removeItem(SCOPES_VERSION_KEY)
+  clearListeningCache()
 }
 
 /** True when the saved token predates the current scope list. */

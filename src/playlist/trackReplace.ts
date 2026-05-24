@@ -69,8 +69,13 @@ function bindReplaceModalPreviews(overlay: HTMLElement): void {
         }
 
         btn.classList.add('replace-preview-playing')
-        const ok = await playPreview(previewUrl)
-        if (token !== hoverToken) return
+        const ok = await playPreview(previewUrl, {
+          isCancelled: () => token !== hoverToken,
+        })
+        if (token !== hoverToken) {
+          stopPreview()
+          return
+        }
         if (!ok) {
           btn.classList.remove('replace-preview-playing')
           btn.classList.add('replace-preview-unavailable')
