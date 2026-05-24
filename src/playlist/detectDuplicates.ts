@@ -8,7 +8,11 @@ import {
   getVariantLabels,
   type DuplicateGroup,
 } from '../spotify/trackDuplicates'
-import { playlistDebug, playlistDebugError } from '../spotify/playlistDebug'
+import {
+  playlistDebug,
+  playlistDebugError,
+  playlistDebugWarn,
+} from '../spotify/playlistDebug'
 import { resolvePreviewUrl } from '../spotify/preview'
 import type { PlaylistTrackEntry, SpotifyTrack } from '../spotify/types'
 
@@ -273,11 +277,26 @@ function bindResultsModal(state: ResultsModalState): void {
         const row = btn.closest('.dup-compare-track')
         const rowName = row?.querySelector('.replace-track-name')?.textContent ?? '?'
 
-        if (Number.isNaN(position)) {
-          playlistDebug('dup modal: Remove clicked but position missing', {
+        if (Number.isNaN(position) || !trackId) {
+          playlistDebug('dup modal: Remove clicked but position or trackId missing', {
             dataset: { ...btn.dataset },
             rowName,
           })
+          return
+        }
+
+        const cached = entries.find((e) => e.position === position)
+        if (!cached || cached.track.id !== trackId) {
+          playlistDebugWarn('dup modal: cached entry mismatch before remove', {
+            playlistPosition: position,
+            trackId,
+            foundId: cached?.track.id ?? null,
+            foundName: cached?.track.name ?? null,
+          })
+          showModalError(
+            overlay,
+            'This track is no longer at that position. Close and reopen duplicates, or refresh the playlist.'
+          )
           return
         }
 
@@ -285,6 +304,7 @@ function bindResultsModal(state: ResultsModalState): void {
           playlistId,
           playlistPosition: position,
           displayNumber: position + 1,
+          trackId,
           rowName,
         })
 
@@ -301,6 +321,7 @@ function bindResultsModal(state: ResultsModalState): void {
           const freshEntries = await removePlaylistEntryAtPosition(
             playlistId,
             position,
+            trackId,
             market
           )
 

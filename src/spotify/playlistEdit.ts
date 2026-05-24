@@ -268,9 +268,15 @@ function assertPlaylistRowRemoved(
 export async function removePlaylistEntryAtPosition(
   playlistId: string,
   playlistPosition: number,
+  expectedTrackId: string,
   market?: string
 ): Promise<PlaylistTrackEntry[]> {
-  playlistDebug('remove: start', { playlistId, playlistPosition, market })
+  playlistDebug('remove: start', {
+    playlistId,
+    playlistPosition,
+    expectedTrackId,
+    market,
+  })
 
   const entries = await getPlaylistTrackEntries(playlistId, market)
   const target = findEntryAtPlaylistPosition(entries, playlistPosition)
@@ -279,6 +285,7 @@ export async function removePlaylistEntryAtPosition(
     playableCount: entries.length,
     requestedPosition: playlistPosition,
     displayNumber: playlistPosition + 1,
+    expectedTrackId,
     maxStoredPosition: entries.length
       ? Math.max(...entries.map((e) => e.position))
       : null,
@@ -288,6 +295,7 @@ export async function removePlaylistEntryAtPosition(
           id: target.track.id,
           uri: target.uri,
           storedPosition: target.position,
+          idMatches: target.track.id === expectedTrackId,
           arrayIndex: entries.indexOf(target),
         }
       : null,
@@ -305,9 +313,12 @@ export async function removePlaylistEntryAtPosition(
       })),
   })
 
-  if (!target) {
-    playlistDebugWarn('remove: no entry at playlist position', {
+  if (!target || target.track.id !== expectedTrackId) {
+    playlistDebugWarn('remove: position/id mismatch', {
       playlistPosition,
+      expectedTrackId,
+      foundId: target?.track.id ?? null,
+      foundName: target?.track.name ?? null,
       hint: 'Position may have shifted — refresh the playlist',
     })
     throw new Error(
