@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["jest"],
+    "verbatimModuleSyntax": false,
+    "allowImportingTsExtensions": false,
+    "moduleResolution": "bundler",
+    "module": "commonjs",
+    "isolatedModules": true,
+    "ignoreDeprecations": "6.0"
+  },
+  "include": ["src/**/*.ts"]
+}

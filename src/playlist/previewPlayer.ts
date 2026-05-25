@@ -1,10 +1,12 @@
+import { measurePreviewGain } from './previewLoudness'
 import { tuningToAnalyser } from './previewVisualizerTuning'
 
 const PREVIEW_DURATION_MS = 20_000
-/** Playback level for 30s Spotify previews (1.0 = full; 0.72 ≈ 28% quieter). */
+/** Master level for previews before per-track loudness adjustment. */
 const PREVIEW_VOLUME = 0.72
 
 const audioBlobUrlBySource = new Map<string, string>()
+const playbackGainBySource = new Map<string, number>()
 const audioFetchInFlight = new Map<string, Promise<string>>()
 
 let audioEl: HTMLAudioElement | null = null
@@ -13,6 +15,7 @@ let unlocked = false
 let lastError: string | null = null
 
 let audioContext: AudioContext | null = null
+let gainNode: GainNode | null = null
 let analyserNode: AnalyserNode | null = null
 let mediaSource: MediaElementAudioSourceNode | null = null
 
@@ -34,9 +37,11 @@ function ensureAnalyser(audio: HTMLAudioElement): AnalyserNode | null {
     }
     if (!mediaSource) {
       mediaSource = audioContext.createMediaElementSource(audio)
+      gainNode = audioContext.createGain()
       analyserNode = audioContext.createAnalyser()
       applyPreviewAnalyserTuning()
-      mediaSource.connect(analyserNode)
+      mediaSource.connect(gainNode)
+      gainNode.connect(analyserNode)
       analyserNode.connect(audioContext.destination)
     }
     if (audioContext.state === 'suspended') {
@@ -64,6 +69,15 @@ export function applyPreviewAnalyserTuning(): void {
 
 export function isPreviewPlaying(): boolean {
   return Boolean(audioEl && !audioEl.paused && !audioEl.ended && audioEl.currentTime > 0)
+}
+
+function applyPlaybackLevel(linearGain: number): void {
+  const level = Math.min(1, Math.max(0, linearGain))
+  if (gainNode) {
+    gainNode.gain.value = level
+  } else if (audioEl) {
+    audioEl.volume = level
+  }
 }
 
 function ensureAudio(): HTMLAudioElement {
@@ -109,8 +123,12 @@ async function cachedPlaybackUrl(previewUrl: string): Promise<string> {
     const res = await fetch(previewUrl)
     if (!res.ok) throw new Error('Preview failed to load')
     const blob = await res.blob()
-    const objectUrl = URL.createObjectURL(blob)
+    const [objectUrl, trackGain] = await Promise.all([
+      Promise.resolve(URL.createObjectURL(blob)),
+      measurePreviewGain(blob),
+    ])
     audioBlobUrlBySource.set(previewUrl, objectUrl)
+    playbackGainBySource.set(previewUrl, PREVIEW_VOLUME * trackGain)
     return objectUrl
   })().finally(() => {
     audioFetchInFlight.delete(previewUrl)
@@ -162,7 +180,10 @@ export async function playPreview(
     return false
   }
   audio.src = playbackUrl
-  audio.volume = PREVIEW_VOLUME
+  const playbackGain =
+    playbackGainBySource.get(previewUrl) ?? PREVIEW_VOLUME
+  applyPlaybackLevel(playbackGain)
+  audio.volume = playbackGain
 
   try {
     if (audio.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
@@ -198,6 +219,7 @@ export async function playPreview(
     }
 
     ensureAnalyser(audio)
+    applyPlaybackLevel(playbackGain)
     await audio.play()
     if (isCancelled()) {
       stopPreview()

@@ -60,11 +60,52 @@ let modalEl: HTMLElement | null = null
 /** Collapsed by default; set localStorage `niche_cart_collapsed` to `"false"` to stay expanded. */
 let cartCollapsed = localStorage.getItem(CART_COLLAPSED_KEY) !== 'false'
 let trackResolver: ((trackId: string) => SpotifyTrack | null) | null = null
-let dropZoneBound = false
+let cartDropAbort: AbortController | null = null
+let cartClickBound = false
+
+export type CartTrackAction = {
+  action: 'add' | 'remove'
+  track: SpotifyTrack
+  el: HTMLElement
+}
+
+let onCartTrackAction: ((ev: CartTrackAction) => void) | null = null
+
+/** Optional UI hook (e.g. playlist detail toast). */
+export function setCartTrackActionHandler(
+  handler: ((ev: CartTrackAction) => void) | null
+): void {
+  onCartTrackAction = handler
+}
 
 function dragHasTrackType(dt: DataTransfer | null): boolean {
   if (!dt) return false
-  return Array.from(dt.types).includes(NICHE_TRACK_DRAG_TYPE)
+  const types = Array.from(dt.types)
+  return types.includes(NICHE_TRACK_DRAG_TYPE) || types.includes('text/plain')
+}
+
+function readDragTrackId(dt: DataTransfer): string {
+  return dt.getData(NICHE_TRACK_DRAG_TYPE) || dt.getData('text/plain')
+}
+
+/** Wire drag-to-cart on a track row or grid cell. */
+export function bindTrackDragSource(
+  el: HTMLElement,
+  track: SpotifyTrack,
+  draggingClass: string
+): void {
+  el.addEventListener('dragstart', (e) => {
+    const dt = e.dataTransfer
+    if (!dt) return
+    dt.setData(NICHE_TRACK_DRAG_TYPE, track.id)
+    dt.setData('text/plain', track.id)
+    dt.effectAllowed = 'copy'
+    el.classList.add(draggingClass)
+  })
+
+  el.addEventListener('dragend', () => {
+    el.classList.remove(draggingClass)
+  })
 }
 
 export function setCartTrackResolver(
@@ -100,32 +141,85 @@ function tryAddTrackFromDrag(trackId: string): boolean {
 }
 
 function bindCartDropZone(el: HTMLElement): void {
-  if (dropZoneBound) return
-  dropZoneBound = true
+  cartDropAbort?.abort()
+  const ac = new AbortController()
+  cartDropAbort = ac
+  const { signal } = ac
 
-  document.addEventListener('dragend', () => {
-    el.classList.remove('cart-bar-drop-active')
-  })
+  document.addEventListener(
+    'dragend',
+    () => {
+      el.classList.remove('cart-bar-drop-active')
+    },
+    { signal }
+  )
 
-  el.addEventListener('dragover', (e) => {
-    if (!dragHasTrackType(e.dataTransfer)) return
+  el.addEventListener(
+    'dragover',
+    (e) => {
+      if (!dragHasTrackType(e.dataTransfer)) return
+      e.preventDefault()
+      e.dataTransfer!.dropEffect = 'copy'
+      el.classList.add('cart-bar-drop-active')
+    },
+    { signal }
+  )
+
+  el.addEventListener(
+    'dragleave',
+    (e) => {
+      const related = (e as DragEvent).relatedTarget as Node | null
+      if (related && el.contains(related)) return
+      el.classList.remove('cart-bar-drop-active')
+    },
+    { signal }
+  )
+
+  el.addEventListener(
+    'drop',
+    (e) => {
+      el.classList.remove('cart-bar-drop-active')
+      const dt = e.dataTransfer
+      if (!dt) return
+      const trackId = readDragTrackId(dt)
+      if (!trackId) return
+      e.preventDefault()
+      tryAddTrackFromDrag(trackId)
+    },
+    { signal }
+  )
+}
+
+function bindGlobalCartClicks(): void {
+  if (cartClickBound) return
+  cartClickBound = true
+
+  document.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(
+      '.btn-add-cart[data-track-id]'
+    )
+    if (!btn) return
     e.preventDefault()
-    e.dataTransfer!.dropEffect = 'copy'
-    el.classList.add('cart-bar-drop-active')
-  })
+    e.stopPropagation()
 
-  el.addEventListener('dragleave', (e) => {
-    const related = (e as DragEvent).relatedTarget as Node | null
-    if (related && el.contains(related)) return
-    el.classList.remove('cart-bar-drop-active')
-  })
-
-  el.addEventListener('drop', (e) => {
-    el.classList.remove('cart-bar-drop-active')
-    const trackId = e.dataTransfer?.getData(NICHE_TRACK_DRAG_TYPE)
+    const trackId = btn.dataset.trackId
     if (!trackId) return
-    e.preventDefault()
-    tryAddTrackFromDrag(trackId)
+
+    const track = trackResolver?.(trackId)
+    if (!track) return
+
+    const scope =
+      (btn.closest('.detail-view, .listening-browse, #app') as ParentNode | null) ??
+      document
+
+    if (isInCart(trackId)) {
+      removeFromCart(trackId)
+      onCartTrackAction?.({ action: 'remove', track, el: btn })
+    } else if (addToCart(track)) {
+      flashCartBar()
+      onCartTrackAction?.({ action: 'add', track, el: btn })
+    }
+    updateCartButtons(scope)
   })
 }
 
@@ -619,6 +713,7 @@ export function mountCartUI(context: CartUiContext): void {
     updateCartButtons()
   })
 
+  bindGlobalCartClicks()
   bindCartDropZone(barEl)
   applyCartBarBodyClass()
   renderCartBar()
@@ -631,6 +726,7 @@ export function unmountCartUI(): void {
   barEl = null
   ctx = null
   trackResolver = null
-  dropZoneBound = false
+  cartDropAbort?.abort()
+  cartDropAbort = null
   document.body.classList.remove('has-cart-bar', 'has-cart-bar-collapsed')
 }

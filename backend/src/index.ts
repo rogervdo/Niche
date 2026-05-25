@@ -39,7 +39,8 @@ app.use(
     credentials: true,
   })
 )
-app.use(express.json())
+// Default 100kb is too small for playlist cache sync (full track entries).
+app.use(express.json({ limit: '10mb' }))
 
 // Vercel Services routePrefix `/api` strips that prefix before the request hits Express.
 // Local dev: Vite proxies `/api` → backend with the full path, so mount at `/api`.

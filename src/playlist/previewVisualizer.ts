@@ -41,8 +41,8 @@ function resizeCanvas(canvas: HTMLCanvasElement): void {
   }
 }
 
-/** Use ~75% of FFT bins so the rightmost bars stop below airy top-end Hz. */
-const HIGH_FREQ_BIN_RATIO = 0.75
+/** Use ~68% of FFT bins so the rightmost bars stop below airy top-end Hz. */
+const HIGH_FREQ_BIN_RATIO = 0.675
 
 /**
  * Log-spaced bands: bar 0 (left) = bass, bar N-1 (right) = treble.

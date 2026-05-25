@@ -18,7 +18,13 @@ import { removeTracksFromLiked, saveTracksToLiked } from '../cart/playlistAction
 import type { PlaylistRef } from './trackPlaylistIndex'
 import { setCachedEntries } from '../spotify/playlistCache'
 import { isPlaylistDebugEnabled, playlistDebug, playlistDebugWarn } from '../spotify/playlistDebug'
-import { playPreview, stopPreview, unlockPreviewAudio, getPreviewError } from './previewPlayer'
+import {
+  playPreview,
+  stopPreview,
+  unlockPreviewAudio,
+  getPreviewError,
+  isPreviewPlaying,
+} from './previewPlayer'
 import { startPreviewVisualizer, stopPreviewVisualizer } from './previewVisualizer'
 import { isVisualizerEnabled } from './previewVisualizerTuning'
 import {
@@ -29,10 +35,11 @@ import { resolvePreviewUrl } from '../spotify/preview'
 import { runTrackReplaceFlow } from './trackReplace'
 import { runDuplicateDetectFlow } from './detectDuplicates'
 import { duplicateTrackIds } from '../spotify/trackDuplicates'
-import { addToCart, isInCart, removeFromCart } from '../cart/cart'
+import { isInCart } from '../cart/cart'
 import {
-  NICHE_TRACK_DRAG_TYPE,
+  bindTrackDragSource,
   openAddTracksToPlaylistModal,
+  setCartTrackActionHandler,
   setCartTrackResolver,
   updateCartButtons,
 } from '../cart/ui'
@@ -308,7 +315,6 @@ let detailReplaceCtx: {
 } | null = null
 
 let replaceClickBound = false
-let addToCartClickBound = false
 let addToPlaylistClickBound = false
 let duplicateClickBound = false
 let ownPlaylistTrackIndex: Map<string, PlaylistRef[]> | null = null
@@ -320,6 +326,15 @@ let likedHeartClickBound = false
 const likedTogglePending = new Set<string>()
 let detailRoot: HTMLElement | null = null
 let likedHeartsPrefListenerBound = false
+
+setCartTrackActionHandler(({ action, track, el }) => {
+  if (!detailRoot?.contains(el)) return
+  if (action === 'add') {
+    showDetailNotice(detailRoot, `Added “${track.name}” to cart.`)
+  } else {
+    showDetailNotice(detailRoot, `Removed “${track.name}” from cart.`)
+  }
+})
 
 function resetSortState(playlistId: string): void {
   if (currentPlaylistId === playlistId) return
@@ -656,21 +671,6 @@ function formatAddedAt(addedAt: string | null | undefined): string {
   })
 }
 
-function formatAddedAtBadge(addedAt: string | null | undefined): string {
-  if (!addedAt) return ''
-  const d = new Date(addedAt)
-  if (Number.isNaN(d.getTime())) return ''
-  const now = new Date()
-  if (d.getFullYear() === now.getFullYear()) {
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-  }
-  return d.toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: '2-digit',
-  })
-}
-
 function compareText(a: string, b: string): number {
   return a.localeCompare(b, undefined, { sensitivity: 'base' })
 }
@@ -866,10 +866,9 @@ function releaseDateBadgeInner(track: SpotifyTrack): string {
 }
 
 function addedAtBadgeInner(row: DisplayRow): string {
-  const label = formatAddedAtBadge(row.addedAt)
+  const label = formatAddedAt(row.addedAt)
   if (!label) return ''
-  const full = formatAddedAt(row.addedAt)
-  return `<span class="track-added-at-badge" aria-label="Added ${escapeHtml(full || label)}">${escapeHtml(label)}</span>`
+  return `<span class="track-added-at-badge" aria-label="Added ${escapeHtml(label)}">${escapeHtml(label)}</span>`
 }
 
 function artBadgesHtml(track: SpotifyTrack, row: DisplayRow): string {
@@ -1411,31 +1410,13 @@ function tracksSection(
   `
 }
 
-function bindTrackDrag(
-  el: HTMLElement,
-  track: SpotifyTrack,
-  draggingClass: string
-): void {
-  el.addEventListener('dragstart', (e) => {
-    const dt = e.dataTransfer
-    if (!dt) return
-    dt.setData(NICHE_TRACK_DRAG_TYPE, track.id)
-    dt.effectAllowed = 'copy'
-    el.classList.add(draggingClass)
-  })
-
-  el.addEventListener('dragend', () => {
-    el.classList.remove(draggingClass)
-  })
-}
-
 function bindListTrackDrag(root: HTMLElement, rows: DisplayRow[]): void {
   root.querySelectorAll<HTMLElement>('.track-row[data-track-id]').forEach((row) => {
     const trackId = row.dataset.trackId
     if (!trackId) return
     const track = rows.find((r) => r.track.id === trackId)?.track
     if (!track) return
-    bindTrackDrag(row, track, 'track-row-dragging')
+    bindTrackDragSource(row, track, 'track-row-dragging')
   })
 }
 
@@ -1448,6 +1429,8 @@ function bindGridPreview(
   /** Clicked track stays in the panel until cleared or another track is selected. */
   let pinnedIndex: number | null = null
   let activeIndex: number | null = null
+  let hoveredIndex: number | null = null
+  let pendingPreviewIndex: number | null = null
 
   let lastPanelStatus: 'idle' | 'loading' | 'playing' | 'unavailable' | 'error' = 'idle'
 
@@ -1499,47 +1482,67 @@ function bindGridPreview(
     updatePanel(null)
   }
 
+  const keepPreviewOnPin = (index: number): boolean => {
+    const onThisTrack =
+      hoveredIndex === index ||
+      activeIndex === index ||
+      pendingPreviewIndex === index
+    if (!onThisTrack) return false
+    return (
+      isPreviewPlaying() ||
+      pendingPreviewIndex === index ||
+      lastPanelStatus === 'playing' ||
+      lastPanelStatus === 'loading'
+    )
+  }
+
   const selectTrack = (index: number, pin: boolean): void => {
-    unlockPreviewAudio()
     if (pin) pinnedIndex = index
-    if (
-      pin &&
-      activeIndex === index &&
-      (lastPanelStatus === 'playing' || lastPanelStatus === 'loading')
-    ) {
-      updatePanel(index, lastPanelStatus)
+    if (pin && keepPreviewOnPin(index)) {
+      const status = isPreviewPlaying()
+        ? 'playing'
+        : lastPanelStatus === 'idle'
+          ? 'loading'
+          : lastPanelStatus
+      updatePanel(index, status)
       return
     }
+    pendingPreviewIndex = index
     void (async () => {
+      unlockPreviewAudio()
       const token = ++hoverToken
       const track = rows[index]?.track
       if (!track) return
 
-      updatePanel(index, 'loading')
-      stopPreview()
-
-      const previewUrl = await resolvePreviewUrl(track.id, track.preview_url)
-
-      if (token !== hoverToken) return
-
-      if (!previewUrl) {
-        updatePanel(index, 'unavailable')
-        return
-      }
-
-      updatePanel(index, 'playing')
-      const ok = await playPreview(previewUrl, {
-        isCancelled: () => token !== hoverToken,
-      })
-      if (token !== hoverToken) {
+      try {
+        updatePanel(index, 'loading')
         stopPreview()
-        return
-      }
 
-      if (!ok) {
-        updatePanel(index, 'error', getPreviewError() ?? 'Could not play preview')
-      } else {
-        syncVisualizer('playing')
+        const previewUrl = await resolvePreviewUrl(track.id, track.preview_url)
+
+        if (token !== hoverToken) return
+
+        if (!previewUrl) {
+          updatePanel(index, 'unavailable')
+          return
+        }
+
+        updatePanel(index, 'playing')
+        const ok = await playPreview(previewUrl, {
+          isCancelled: () => token !== hoverToken,
+        })
+        if (token !== hoverToken) {
+          stopPreview()
+          return
+        }
+
+        if (!ok) {
+          updatePanel(index, 'error', getPreviewError() ?? 'Could not play preview')
+        } else {
+          syncVisualizer('playing')
+        }
+      } finally {
+        if (pendingPreviewIndex === index) pendingPreviewIndex = null
       }
     })()
   }
@@ -1558,7 +1561,7 @@ function bindGridPreview(
 
     let suppressClick = false
 
-    bindTrackDrag(cell, track, 'album-cell-dragging')
+    bindTrackDragSource(cell, track, 'album-cell-dragging')
     cell.addEventListener('dragend', () => {
       suppressClick = true
       window.setTimeout(() => {
@@ -1568,11 +1571,13 @@ function bindGridPreview(
 
     cell.addEventListener('mouseenter', () => {
       if (pinnedIndex != null) return
+      hoveredIndex = index
       selectTrack(index, false)
     })
 
     cell.addEventListener('mouseleave', (e) => {
       if (pinnedIndex != null) return
+      if (hoveredIndex === index) hoveredIndex = null
       const related = e.relatedTarget
       if (related instanceof Node && cell.contains(related)) return
       if (related instanceof Element) {
@@ -2135,38 +2140,6 @@ function bindLikedHeart(root: HTMLElement): void {
   root.addEventListener('click', onHeartPointer, true)
 }
 
-function bindAddToCart(root: HTMLElement): void {
-  if (addToCartClickBound) return
-  addToCartClickBound = true
-
-  root.addEventListener('click', (e) => {
-    const ctx = detailReplaceCtx
-    if (!ctx) return
-
-    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(
-      '.btn-add-cart[data-track-id]'
-    )
-    if (!btn) return
-    e.preventDefault()
-    e.stopPropagation()
-
-    const trackId = btn.dataset.trackId
-    if (!trackId) return
-
-    const entry = ctx.entries.find((en) => en.track.id === trackId)
-    if (!entry) return
-
-    if (isInCart(trackId)) {
-      removeFromCart(trackId)
-      showDetailNotice(root, `Removed “${entry.track.name}” from cart.`)
-    } else {
-      addToCart(entry.track)
-      showDetailNotice(root, `Added “${entry.track.name}” to cart.`)
-    }
-    updateCartButtons(root)
-  })
-}
-
 function bindAddToPlaylist(root: HTMLElement): void {
   if (addToPlaylistClickBound) return
   addToPlaylistClickBound = true
@@ -2510,7 +2483,6 @@ export function renderPlaylistDetail(
   bindGridSizeControls(root, playlist, entries, kind, market, onBack, onTracksUpdated)
   bindDetectDuplicates(root)
   bindTrackReplace(root)
-  bindAddToCart(root)
   bindLikedHeart(root)
   bindAddToPlaylist(root)
   bindOwnPlaylistTags(root)

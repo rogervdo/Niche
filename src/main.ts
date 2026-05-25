@@ -858,7 +858,20 @@ function bindPlaylistLibrary(root: HTMLElement): void {
 }
 
 function updateDashboardResults(): void {
-  renderDashboard()
+  if (currentView !== 'dashboard') return
+  const visible = sortPlaylists(filteredPlaylists())
+  const countEl = app.querySelector('.results-count')
+  if (countEl) {
+    countEl.textContent = `${visible.length} playlist${visible.length === 1 ? '' : 's'}`
+  }
+  const libraryRoot = app.querySelector('.playlist-library-root')
+  if (libraryRoot) {
+    libraryRoot.innerHTML = libraryBodyHtml(visible)
+    bindPlaylistLibrary(app)
+    app.querySelector<HTMLButtonElement>('[data-liked-songs]')?.addEventListener('click', () => {
+      void openLikedSongs()
+    })
+  }
 }
 
 function bindPlaylistSortMenu(root: HTMLElement): void {

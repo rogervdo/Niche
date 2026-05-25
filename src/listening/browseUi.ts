@@ -1,9 +1,16 @@
-import { addToCart, isInCart, removeFromCart } from '../cart/cart'
+import { isInCart } from '../cart/cart'
+import { bindTrackDragSource, setCartTrackResolver, updateCartButtons } from '../cart/ui'
 import {
   bindPreviewSettings,
   previewSettingsControlsHtml,
 } from '../playlist/gridPreviewSettings'
-import { playPreview, stopPreview, unlockPreviewAudio, getPreviewError } from '../playlist/previewPlayer'
+import {
+  playPreview,
+  stopPreview,
+  unlockPreviewAudio,
+  getPreviewError,
+  isPreviewPlaying,
+} from '../playlist/previewPlayer'
 import { startPreviewVisualizer, stopPreviewVisualizer } from '../playlist/previewVisualizer'
 import { isVisualizerEnabled } from '../playlist/previewVisualizerTuning'
 import { IMAGE_SIZES, renderImg } from '../spotify/images'
@@ -502,14 +509,21 @@ function gridCellHtml(item: ListeningItem, index: number, cellPx: number, select
     sizes: `${cellPx}px`,
   })
 
+  const inCart = item.track && isInCart(item.track.id)
+  const inCartClass = inCart ? ' album-cell-in-cart' : ''
+  const draggable = item.kind === 'track' && item.track ? ' draggable="true"' : ''
+  const trackIdAttr =
+    item.track?.id ? ` data-track-id="${escapeHtml(item.track.id)}"` : ''
+
   return `
     <div
-      class="album-cell${selected ? ' album-cell-active' : ''}"
+      class="album-cell${selected ? ' album-cell-active' : ''}${inCartClass}"
       role="button"
       tabindex="0"
       data-item-index="${index}"
       data-item-id="${escapeHtml(item.id)}"
       aria-label="${escapeHtml(item.name)}"
+      ${draggable}${trackIdAttr}
     >
       ${art || `<span class="album-cell-placeholder">${item.kind === 'genre' ? '#' : '♪'}</span>`}
     </div>
@@ -615,6 +629,33 @@ export function bindListeningBrowse(opts: BrowseBindOpts): void {
     }
   }
 
+  const updateSearchMeta = (): void => {
+    const wrap = root.querySelector('[data-listening-toolbar]')
+    if (!wrap) return
+    const visible = getVisible()
+    const q = prefs.searchQuery.trim()
+    const existing = wrap.querySelector('.detail-track-search-meta')
+    if (q && visible.length !== allItems.length) {
+      const html = `<p class="detail-track-search-meta">${visible.length} of ${allItems.length}</p>`
+      if (existing) existing.outerHTML = html
+      else wrap.insertAdjacentHTML('beforeend', html)
+    } else {
+      existing?.remove()
+    }
+  }
+
+  const applyPrefs = (
+    next: BrowsePrefs,
+    opts: { toolbar?: boolean; body?: boolean } = {}
+  ): void => {
+    prefs = next
+    saveBrowsePrefs(storagePrefix, prefs)
+    onChange(prefs)
+    if (opts.toolbar !== false) rerenderToolbar()
+    else updateSearchMeta()
+    if (opts.body !== false) rerenderBody()
+  }
+
   const rerenderToolbar = (): void => {
     const wrap = root.querySelector('[data-listening-toolbar]')
     if (!wrap) return
@@ -627,22 +668,22 @@ export function bindListeningBrowse(opts: BrowseBindOpts): void {
       allItems.length,
       genreBarMode()
     )
-    bindToolbar(root, prefs, sortOptions, storagePrefix, allItems, emptyMessage, (next) => {
-      prefs = next
-      saveBrowsePrefs(storagePrefix, prefs)
-      onChange(prefs)
-      rerenderToolbar()
-      rerenderBody()
-    })
+    bindToolbar(root, () => prefs, applyPrefs)
   }
 
-  bindToolbar(root, prefs, sortOptions, storagePrefix, allItems, emptyMessage, (next) => {
-    prefs = next
-    saveBrowsePrefs(storagePrefix, prefs)
-    onChange(prefs)
-    rerenderToolbar()
-    rerenderBody()
+  bindToolbar(root, () => prefs, applyPrefs)
+
+  setCartTrackResolver((trackId) => {
+    const item = allItems.find((i) => i.track?.id === trackId)
+    return item?.track ?? null
   })
+
+  const rootWithCleanup = root as HTMLElement & { __listeningPreviewCleanup?: () => void }
+  const prevCleanup = rootWithCleanup.__listeningPreviewCleanup
+  rootWithCleanup.__listeningPreviewCleanup = () => {
+    prevCleanup?.()
+    setCartTrackResolver(null)
+  }
 
   if (!genreBarMode()) {
     const visible = getVisible()
@@ -654,15 +695,12 @@ export function bindListeningBrowse(opts: BrowseBindOpts): void {
 
 function bindToolbar(
   root: HTMLElement,
-  prefs: BrowsePrefs,
-  _sortOptions: SortOption[],
-  _storagePrefix: string,
-  _allItems: ListeningItem[],
-  _emptyMessage: string,
-  onUpdate: (prefs: BrowsePrefs) => void
+  getPrefs: () => BrowsePrefs,
+  onUpdate: (prefs: BrowsePrefs, opts?: { toolbar?: boolean; body?: boolean }) => void
 ): void {
   root.querySelectorAll<HTMLButtonElement>('[data-view-mode]').forEach((btn) => {
     btn.addEventListener('click', () => {
+      const prefs = getPrefs()
       const mode = btn.dataset.viewMode as BrowseViewMode
       if (!mode || mode === prefs.viewMode) return
       stopPreview()
@@ -673,10 +711,11 @@ function bindToolbar(
 
   const search = root.querySelector<HTMLInputElement>('[data-listening-search]')
   search?.addEventListener('input', () => {
-    onUpdate({ ...prefs, searchQuery: search.value })
+    onUpdate({ ...getPrefs(), searchQuery: search.value }, { toolbar: false })
   })
 
   root.querySelector('[data-grid-dec]')?.addEventListener('click', () => {
+    const prefs = getPrefs()
     const next = Math.max(GRID_SIZE_MIN, prefs.gridCellSize - GRID_SIZE_STEP)
     if (next === prefs.gridCellSize) return
     saveGridCellSize(next)
@@ -684,6 +723,7 @@ function bindToolbar(
   })
 
   root.querySelector('[data-grid-inc]')?.addEventListener('click', () => {
+    const prefs = getPrefs()
     const next = Math.min(GRID_SIZE_MAX, prefs.gridCellSize + GRID_SIZE_STEP)
     if (next === prefs.gridCellSize) return
     saveGridCellSize(next)
@@ -720,6 +760,7 @@ function bindToolbar(
   menu?.querySelectorAll<HTMLButtonElement>('[data-sort]').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation()
+      const prefs = getPrefs()
       const mode = btn.dataset.sort as ListeningSortMode
       if (!mode || mode === prefs.sortMode) {
         closeAllSortMenus(root)
@@ -751,6 +792,8 @@ function bindSelection(
   let hoverToken = 0
   let pinnedId: string | null = prefs.selectedId
   let activeId: string | null = prefs.selectedId
+  let hoveredId: string | null = null
+  let pendingPreviewId: string | null = null
   let lastPanelStatus: 'idle' | 'loading' | 'playing' | 'unavailable' | 'error' = 'idle'
 
   const layout = root.querySelector('.album-grid-layout')
@@ -800,7 +843,7 @@ function bindSelection(
     if (!panel) return
     const pinned = item != null && item.id === pinnedId
     panel.outerHTML = detailPanelHtml(item, status, statusMessage, pinned, gridMode)
-    bindPanelActions(root, items)
+    updateCartButtons(root)
     syncVisualizer(status)
     syncActiveClasses(item?.id ?? null)
   }
@@ -819,32 +862,51 @@ function bindSelection(
       updatePanel(item, 'idle')
       return
     }
+    pendingPreviewId = item.id
     unlockPreviewAudio()
     void (async () => {
       const token = ++hoverToken
       const track = item.track!
-      updatePanel(item, 'loading')
-      stopPreview()
-      const previewUrl = await resolvePreviewUrl(track.id, track.preview_url)
-      if (token !== hoverToken) return
-      if (!previewUrl) {
-        updatePanel(item, 'unavailable')
-        return
-      }
-      updatePanel(item, 'playing')
-      const ok = await playPreview(previewUrl, {
-        isCancelled: () => token !== hoverToken,
-      })
-      if (token !== hoverToken) {
+      try {
+        updatePanel(item, 'loading')
         stopPreview()
-        return
-      }
-      if (!ok) {
-        updatePanel(item, 'error', getPreviewError() ?? 'Could not play preview')
-      } else {
-        syncVisualizer('playing')
+        const previewUrl = await resolvePreviewUrl(track.id, track.preview_url)
+        if (token !== hoverToken) return
+        if (!previewUrl) {
+          updatePanel(item, 'unavailable')
+          return
+        }
+        updatePanel(item, 'playing')
+        const ok = await playPreview(previewUrl, {
+          isCancelled: () => token !== hoverToken,
+        })
+        if (token !== hoverToken) {
+          stopPreview()
+          return
+        }
+        if (!ok) {
+          updatePanel(item, 'error', getPreviewError() ?? 'Could not play preview')
+        } else {
+          syncVisualizer('playing')
+        }
+      } finally {
+        if (pendingPreviewId === item.id) pendingPreviewId = null
       }
     })()
+  }
+
+  const keepPreviewOnPin = (item: ListeningItem): boolean => {
+    const onThisItem =
+      hoveredId === item.id ||
+      activeId === item.id ||
+      pendingPreviewId === item.id
+    if (!onThisItem) return false
+    return (
+      isPreviewPlaying() ||
+      pendingPreviewId === item.id ||
+      lastPanelStatus === 'playing' ||
+      lastPanelStatus === 'loading'
+    )
   }
 
   const selectItem = (item: ListeningItem, pin: boolean): void => {
@@ -853,12 +915,13 @@ function bindSelection(
       onPersistSelection({ ...prefs, selectedId: item.id })
     }
     if (item.kind === 'track') {
-      if (
-        pin &&
-        activeId === item.id &&
-        (lastPanelStatus === 'playing' || lastPanelStatus === 'loading')
-      ) {
-        updatePanel(item, lastPanelStatus)
+      if (pin && keepPreviewOnPin(item)) {
+        const status = isPreviewPlaying()
+          ? 'playing'
+          : lastPanelStatus === 'idle'
+            ? 'loading'
+            : lastPanelStatus
+        updatePanel(item, status)
         return
       }
       playTrackPreview(item)
@@ -938,14 +1001,18 @@ function bindSelection(
       selectItem(item, true)
     })
 
-    if (gridMode && item.kind === 'track') {
+    if (gridMode && item.kind === 'track' && item.track) {
+      bindTrackDragSource(el, item.track, 'album-cell-dragging')
+
       el.addEventListener('mouseenter', () => {
         if (pinnedId != null) return
+        hoveredId = id
         selectItem(item, false)
       })
 
       el.addEventListener('mouseleave', (e) => {
         if (pinnedId != null) return
+        if (hoveredId === id) hoveredId = null
         const related = e.relatedTarget
         if (related instanceof Node && el.contains(related)) return
         if (related instanceof Element) {
@@ -960,30 +1027,8 @@ function bindSelection(
   }
 
   root.querySelectorAll<HTMLElement>('.listening-track-row, .album-cell').forEach(bindRow)
-  bindPanelActions(root, items)
+  updateCartButtons(root)
   syncActiveClasses(prefs.selectedId)
-}
-
-function bindPanelActions(root: HTMLElement, items: ListeningItem[]): void {
-  root.querySelectorAll<HTMLButtonElement>('.btn-add-cart').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation()
-      const id = btn.dataset.trackId
-      if (!id) return
-      const item = items.find((i) => i.track?.id === id)
-      const track = item?.track
-      if (!track) return
-      if (isInCart(id)) {
-        removeFromCart(id)
-      } else {
-        addToCart(track)
-      }
-      const inCart = isInCart(id)
-      btn.classList.toggle('in-cart', inCart)
-      btn.innerHTML = inCart ? iconCheck(16) : iconPlus(16)
-      btn.title = inCart ? 'Remove from cart' : 'Add to cart'
-    })
-  })
 }
 
 export function listeningBrowseSectionHtml(

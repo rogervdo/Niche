@@ -7,6 +7,7 @@
   --muted: #8f968f;
   --accent: #1ed760;
   --accent-dim: #169c46;
+  --cart-mark: #7ab3f0;
   --warn: #f5c842;
   --error: #ff6b6b;
   font-family:
@@ -1007,7 +1008,7 @@ code {
 
 .track-row {
   display: grid;
-  grid-template-columns: 1.5rem minmax(0, 1fr) auto minmax(4.5rem, auto) auto;
+  grid-template-columns: 1.5rem minmax(0, 1fr) auto minmax(8.75rem, auto) auto;
   gap: 0.75rem;
   align-items: center;
   padding: 0.35rem 0.5rem;
@@ -1031,7 +1032,7 @@ code {
 }
 
 .track-row-in-cart {
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  background: color-mix(in srgb, var(--cart-mark) 10%, transparent);
 }
 
 .track-row:hover {
@@ -1039,7 +1040,7 @@ code {
 }
 
 .track-row-in-cart:hover {
-  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  background: color-mix(in srgb, var(--cart-mark) 14%, var(--surface));
 }
 
 .track-open {
@@ -1096,12 +1097,12 @@ code {
 }
 
 .btn-track-action.in-cart {
-  color: var(--accent);
+  color: var(--cart-mark);
 }
 
 .btn-track-action.in-cart:hover {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--cart-mark);
+  background: color-mix(in srgb, var(--cart-mark) 14%, transparent);
 }
 
 .btn-track-action svg {
@@ -1257,9 +1258,9 @@ code {
   z-index: 0;
   border-radius: inherit;
   pointer-events: none;
-  background: transparent;
-  -webkit-backdrop-filter: blur(10px) saturate(1.12) brightness(1.02);
-  backdrop-filter: blur(10px) saturate(1.12) brightness(1.02);
+  background: color-mix(in srgb, var(--surface) 30%, transparent);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
 }
 
 .detail-tracks-sticky.is-stuck > .cart-glass-sheen {
@@ -1268,31 +1269,12 @@ code {
   z-index: 1;
   border-radius: inherit;
   pointer-events: none;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.015) 12%, transparent 36%);
-  box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.1);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, transparent 28%);
+  box-shadow: none;
 }
 
 .detail-tracks-sticky.is-stuck > .cart-glass-sheen::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  padding: 0.5px;
-  background: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.1) 0%,
-    rgba(255, 255, 255, 0.03) 45%,
-    rgba(255, 255, 255, 0.05) 100%
-  );
-  -webkit-mask:
-    linear-gradient(#fff 0 0) content-box,
-    linear-gradient(#fff 0 0);
-  mask:
-    linear-gradient(#fff 0 0) content-box,
-    linear-gradient(#fff 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  pointer-events: none;
+  display: none;
 }
 
 .detail-tracks-sticky.is-stuck > :not(.cart-glass-backdrop):not(.cart-glass-sheen) {
@@ -1671,14 +1653,17 @@ code {
 .track-popularity-badge,
 .track-release-year-badge,
 .track-added-at-badge {
-  padding: 0.1rem 0.3rem;
+  padding: 0.1rem 0.35rem;
   border-radius: 4px;
   font-size: 0.65rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
-  color: #fff;
-  background: #000000b8;
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface) 58%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
 }
 
 .track-playlist-tags {
@@ -1725,9 +1710,8 @@ code {
 
 .track-added-at-badge {
   font-weight: 600;
-  max-width: calc(100% - 6px);
-  overflow: hidden;
-  text-overflow: ellipsis;
+  max-width: none;
+  overflow: visible;
   white-space: nowrap;
 }
 
@@ -1929,9 +1913,9 @@ code {
   transform: scale(0.92);
 }
 
-.album-cell-in-cart {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
+.album-cell-in-cart:not(.album-cell-active) {
+  border-color: var(--cart-mark);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--cart-mark) 42%, transparent);
 }
 
 .album-cell .btn-track-liked {
@@ -2937,43 +2921,24 @@ body.has-cart-bar-collapsed {
   z-index: 0;
   border-radius: inherit;
   pointer-events: none;
-  background: transparent;
-  -webkit-backdrop-filter: blur(10px) saturate(1.12) brightness(1.02);
-  backdrop-filter: blur(10px) saturate(1.12) brightness(1.02);
+  background: color-mix(in srgb, var(--surface) 30%, transparent);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
 }
 
-/* Sheen — Apple menu bar: soft top highlight, hairline edge */
+/* Soft top highlight only — no hairline glass border */
 .cart-bar > .cart-glass-sheen {
   position: absolute;
   inset: 0;
   z-index: 1;
   border-radius: inherit;
   pointer-events: none;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.015) 12%, transparent 36%);
-  box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.1);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, transparent 28%);
+  box-shadow: none;
 }
 
 .cart-bar > .cart-glass-sheen::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  padding: 0.5px;
-  background: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.1) 0%,
-    rgba(255, 255, 255, 0.03) 45%,
-    rgba(255, 255, 255, 0.05) 100%
-  );
-  -webkit-mask:
-    linear-gradient(#fff 0 0) content-box,
-    linear-gradient(#fff 0 0);
-  mask:
-    linear-gradient(#fff 0 0) content-box,
-    linear-gradient(#fff 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  pointer-events: none;
+  display: none;
 }
 
 .cart-bar > :not(.cart-glass-backdrop):not(.cart-glass-sheen) {
@@ -3065,8 +3030,10 @@ body.has-cart-bar-collapsed {
   padding: 0.05rem 0.35rem;
   margin-left: 0.3rem;
   border-radius: 6px;
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
   font-size: 0.72rem;
   font-variant-numeric: tabular-nums;
 }
