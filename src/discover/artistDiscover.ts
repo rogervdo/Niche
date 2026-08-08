@@ -17,6 +17,12 @@ import {
   recommendationSeedGenres,
 } from './genres'
 import { spotifyFetch } from '../spotify/api'
+import {
+  batchGetArtists,
+  type SpotifyArtistFull,
+} from '../spotify/artists'
+
+export type { SpotifyArtistFull } from '../spotify/artists'
 
 const PLAYLIST_SIZE = 30
 const RELATED_PER_ANCHOR = 40
@@ -24,14 +30,6 @@ const SEARCH_LIMIT = 50
 const SEARCH_PAGES = 2
 const MAX_CANDIDATES = 500
 const RANK_POOL_SHUFFLE = 100
-
-export interface SpotifyArtistFull {
-  id: string
-  name: string
-  genres: string[]
-  popularity: number
-  followers: { total: number }
-}
 
 interface ScoredArtist {
   id: string
@@ -47,21 +45,6 @@ function shuffle<T>(arr: T[]): T[] {
     ;[copy[i], copy[j]] = [copy[j]!, copy[i]!]
   }
   return copy
-}
-
-async function batchGetArtists(ids: string[]): Promise<SpotifyArtistFull[]> {
-  const unique = [...new Set(ids)]
-  const artists: SpotifyArtistFull[] = []
-  for (let i = 0; i < unique.length; i += 50) {
-    const chunk = unique.slice(i, i + 50)
-    const res = await spotifyFetch<{ artists: (SpotifyArtistFull | null)[] }>(
-      `/artists?ids=${chunk.join(',')}`
-    )
-    for (const a of res.artists ?? []) {
-      if (a?.id) artists.push(a)
-    }
-  }
-  return artists
 }
 
 async function inferGenresFromTopArtists(): Promise<string[]> {

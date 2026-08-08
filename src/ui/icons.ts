@@ -36,6 +36,10 @@ export function iconDuplicates(size = 18): string {
   return `<svg ${svgAttrs} width="${size}" height="${size}"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 4H6a2 2 0 0 0-2 2v10"/></svg>`
 }
 
+export function iconChart(size = 18): string {
+  return `<svg ${svgAttrs} width="${size}" height="${size}"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>`
+}
+
 export function iconChevronLeft(size = 18): string {
   return `<svg ${svgAttrs} width="${size}" height="${size}"><path d="M15 18l-6-6 6-6"/></svg>`
 }

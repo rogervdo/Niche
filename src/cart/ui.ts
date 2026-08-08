@@ -26,6 +26,7 @@ export const NICHE_TRACK_DRAG_TYPE = 'application/x-niche-track-id'
 const CART_COLLAPSED_KEY = 'niche_cart_collapsed'
 const ALSO_LIKED_KEY = 'niche_cart_also_liked'
 import { appendTracksToPlaylist, createUserPlaylist, saveTracksToLiked } from './playlistActions'
+import { patchTagIndex } from '../playlist/trackPlaylistIndex'
 import {
   bindPlaylistSearch,
   bindRecentPlaylists,
@@ -497,6 +498,10 @@ function openCreateModal(): void {
         const playlist = await createUserPlaylist(ctx!.userId, name)
         await appendTracksToPlaylist(playlist.id, uris)
         if (alsoLiked) await addCartTracksToLiked()
+        patchTagIndex(
+          { id: playlist.id, name: playlist.name },
+          getCartTracks().map((t) => t.id)
+        )
         upsertCachedPlaylist(
           {
             ...playlist,
@@ -640,6 +645,10 @@ export function openAddTracksToPlaylistModal(
         const alsoLiked = alsoLikedInput?.checked ?? false
         await appendTracksToPlaylist(playlistId, uris)
         if (alsoLiked) await addTracksToLiked(tracks)
+        patchTagIndex(
+          { id: playlist.id, name: playlist.name },
+          tracks.map((t) => t.id)
+        )
         await invalidateRemotePlaylistTracks(ctx.userId, playlistId, ctx.market)
         const entries = await getPlaylistTrackEntries(playlistId, ctx.market)
         setCachedEntries(playlistId, ctx.market, entries)

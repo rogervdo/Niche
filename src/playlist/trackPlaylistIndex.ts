@@ -1,4 +1,6 @@
-import { classifyPlaylist, spotifyFetch } from '../spotify/api'
+import { fetchPlaylistTracksFromCache } from '../api/playlistCache'
+import { spotifyFetch } from '../spotify/api'
+import { filterOwnPlaylists } from './ownPlaylists'
 import {
   getCachedPlaylistTrackIds,
   PLAYLIST_CACHE_TTL_MS,
@@ -8,7 +10,7 @@ import type { SpotifyPlaylist } from '../spotify/types'
 
 const PLAYLIST_TRACKS_FIELDS = 'items(track(id)),next'
 const FETCH_CONCURRENCY = 5
-const TAG_INDEX_STORAGE_KEY = 'niche_playlist_tag_index_v1'
+const TAG_INDEX_STORAGE_KEY = 'niche_playlist_tag_index_v2'
 
 export type PlaylistRef = { id: string; name: string }
 
@@ -36,12 +38,7 @@ function tagIndexFingerprint(
   userId: string,
   archivedPlaylistIds: ReadonlySet<string>
 ): string {
-  const ids = playlists
-    .filter((p) => {
-      if (archivedPlaylistIds.has(p.id)) return false
-      const kind = classifyPlaylist(p, userId)
-      return kind === 'yours' || kind === 'collaborative'
-    })
+  const ids = filterOwnPlaylists(playlists, userId, archivedPlaylistIds)
     .map((p) => p.id)
     .sort()
   const archived = [...archivedPlaylistIds].sort().join(',')
@@ -99,6 +96,36 @@ export function clearStoredTagIndex(): void {
   }
 }
 
+let liveTagIndex: Map<string, PlaylistRef[]> | null = null
+let onLiveTagIndexPatched: (() => void) | null = null
+
+export function setLiveTagIndex(index: Map<string, PlaylistRef[]> | null): void {
+  liveTagIndex = index
+}
+
+export function onTagIndexPatched(listener: (() => void) | null): void {
+  onLiveTagIndexPatched = listener
+}
+
+/** Patch in-memory tags after tracks are added (avoids full re-scan). */
+export function patchTagIndex(playlist: PlaylistRef, trackIds: string[]): void {
+  if (!liveTagIndex || !trackIds.length) return
+
+  for (const trackId of trackIds) {
+    if (!trackId) continue
+    const existing = liveTagIndex.get(trackId) ?? []
+    if (existing.some((p) => p.id === playlist.id)) continue
+    liveTagIndex.set(
+      trackId,
+      [...existing, playlist].sort((a, b) =>
+        a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+      )
+    )
+  }
+
+  onLiveTagIndexPatched?.()
+}
+
 async function mapWithConcurrency<T>(
   items: T[],
   limit: number,
@@ -120,10 +147,20 @@ async function mapWithConcurrency<T>(
 
 async function fetchPlaylistTrackIds(
   playlistId: string,
-  market: string
+  market: string,
+  userId?: string
 ): Promise<string[]> {
   const cached = getCachedPlaylistTrackIds(playlistId, market)
   if (cached) return cached
+
+  if (userId) {
+    const remote = await fetchPlaylistTracksFromCache(userId, playlistId, market, false)
+    if (remote?.entries?.length) {
+      const ids = remote.entries.map((e) => e.track.id).filter(Boolean)
+      setCachedPlaylistTrackIds(playlistId, market, ids)
+      return ids
+    }
+  }
 
   const ids: string[] = []
   const marketParam = market ? `&market=${encodeURIComponent(market)}` : ''
@@ -143,18 +180,14 @@ async function fetchPlaylistTrackIds(
   return ids
 }
 
-/** Map track ID → playlists you own (yours + collaborative) that contain it. */
+/** Map track ID → your own playlists (not collaborative or followed) that contain it. */
 export async function buildOwnPlaylistTrackIndex(
   playlists: SpotifyPlaylist[],
   userId: string,
   market: string,
   archivedPlaylistIds: ReadonlySet<string> = new Set()
 ): Promise<Map<string, PlaylistRef[]>> {
-  const own = playlists.filter((p) => {
-    if (archivedPlaylistIds.has(p.id)) return false
-    const kind = classifyPlaylist(p, userId)
-    return kind === 'yours' || kind === 'collaborative'
-  })
+  const own = filterOwnPlaylists(playlists, userId, archivedPlaylistIds)
 
   const fingerprint = tagIndexFingerprint(playlists, userId, archivedPlaylistIds)
   const stored = loadStoredTagIndex(userId, market, fingerprint)
@@ -163,7 +196,7 @@ export async function buildOwnPlaylistTrackIndex(
   const index = new Map<string, PlaylistRef[]>()
 
   await mapWithConcurrency(own, FETCH_CONCURRENCY, async (playlist) => {
-    const trackIds = await fetchPlaylistTrackIds(playlist.id, market)
+    const trackIds = await fetchPlaylistTrackIds(playlist.id, market, userId)
     const ref: PlaylistRef = { id: playlist.id, name: playlist.name }
     for (const trackId of trackIds) {
       const existing = index.get(trackId)

@@ -15,7 +15,11 @@ import {
 } from '../spotify/api'
 import { invalidateRemotePlaylistTracks } from '../api/playlistCache'
 import { removeTracksFromLiked, saveTracksToLiked } from '../cart/playlistActions'
-import type { PlaylistRef } from './trackPlaylistIndex'
+import {
+  onTagIndexPatched,
+  setLiveTagIndex,
+  type PlaylistRef,
+} from './trackPlaylistIndex'
 import { setCachedEntries } from '../spotify/playlistCache'
 import { isPlaylistDebugEnabled, playlistDebug, playlistDebugWarn } from '../spotify/playlistDebug'
 import {
@@ -34,6 +38,7 @@ import {
 import { resolvePreviewUrl } from '../spotify/preview'
 import { runTrackReplaceFlow } from './trackReplace'
 import { runDuplicateDetectFlow } from './detectDuplicates'
+import { runPlaylistAnalyzeFlow } from './analyzePlaylist'
 import { duplicateTrackIds } from '../spotify/trackDuplicates'
 import { isInCart } from '../cart/cart'
 import {
@@ -47,6 +52,7 @@ import { mountBarGlass, unmountBarGlass } from '../cart/glass'
 import {
   iconCheck,
   iconChevronUp,
+  iconChart,
   iconDuplicates,
   iconHeart,
   iconHeartOutline,
@@ -74,7 +80,7 @@ export type PlaylistDetailOpts = {
   onOpenPlaylist?: (playlistId: string) => void
   onRefresh?: (playlistId: string) => Promise<PlaylistDetailRefreshResult>
   userId?: string
-  /** Liked Songs: scan your playlists and tag each track with where it appears. */
+  /** Liked Songs: scan your own playlists and tag each track with where it appears. */
   loadOwnPlaylistTrackIndex?: () => Promise<Map<string, PlaylistRef[]>>
   /** Hide playlist tags for archived library playlists. */
   isPlaylistArchived?: (playlistId: string) => boolean
@@ -89,6 +95,7 @@ type GroupByMode =
   | 'artist_count_desc'
   | 'album'
   | 'release_year'
+  | 'playlist'
 
 type SortMode =
   | 'playlist'
@@ -117,6 +124,13 @@ const GROUP_BY_OPTIONS: { mode: GroupByMode; label: string }[] = [
   { mode: 'album', label: 'Group by album' },
   { mode: 'release_year', label: 'Group by release year' },
 ]
+
+const LIKED_GROUP_BY_OPTION: { mode: GroupByMode; label: string } = {
+  mode: 'playlist',
+  label: 'Group by playlist',
+}
+
+const NOT_IN_ANY_PLAYLIST_LABEL = 'Not in any of your playlists'
 
 const SORT_OPTIONS: { mode: SortMode; label: string }[] = [
   { mode: 'playlist', label: 'Playlist order' },
@@ -202,7 +216,10 @@ function enableTagOverlayForSort(mode: SortMode): void {
   }
   if (changed) saveTagOverlayPrefs()
 }
-const GROUP_BY_MODES = new Set<GroupByMode>(GROUP_BY_OPTIONS.map((o) => o.mode))
+const GROUP_BY_MODES = new Set<GroupByMode>([
+  ...GROUP_BY_OPTIONS.map((o) => o.mode),
+  LIKED_GROUP_BY_OPTION.mode,
+])
 const SORT_MODES = new Set<SortMode>(SORT_OPTIONS.map((o) => o.mode))
 
 const GRID_SIZE_MIN = 80
@@ -223,6 +240,11 @@ function isArtistGroupBy(groupBy: GroupByMode): boolean {
     groupBy === 'artist_count' ||
     groupBy === 'artist_count_desc'
   )
+}
+
+function groupByOptionsForView(kind: PlaylistKind): { mode: GroupByMode; label: string }[] {
+  if (kind === 'liked') return [...GROUP_BY_OPTIONS, LIKED_GROUP_BY_OPTION]
+  return GROUP_BY_OPTIONS
 }
 
 function loadGroupByMode(): GroupByMode {
@@ -283,6 +305,8 @@ let audioFeaturesUnavailable = false
 let currentPlaylistId: string | null = null
 let highlightedDuplicateIds: Set<string> | null = null
 let trackSearchQuery = ''
+const PLAYLIST_FILTER_NONE = '__niche_not_in_any_playlist__'
+let playlistMembershipFilter = ''
 
 function loadToolbarCollapsed(): boolean {
   try {
@@ -298,6 +322,8 @@ type DisplayRow = {
   track: SpotifyTrack
   playlistPosition: number
   addedAt?: string | null
+  /** Set when grouping liked songs by playlist (one row per playlist membership). */
+  playlistGroup?: PlaylistRef | null
 }
 
 let detailViewOpts: PlaylistDetailOpts = { getPlaylists: () => [] }
@@ -317,6 +343,7 @@ let detailReplaceCtx: {
 let replaceClickBound = false
 let addToPlaylistClickBound = false
 let duplicateClickBound = false
+let analyzeClickBound = false
 let ownPlaylistTrackIndex: Map<string, PlaylistRef[]> | null = null
 let ownPlaylistTrackIndexPromise: Promise<Map<string, PlaylistRef[]>> | null = null
 let ownPlaylistTagsClickBound = false
@@ -350,8 +377,10 @@ function forceResetDetailData(): void {
   highlightedDuplicateIds = null
   ownPlaylistTrackIndex = null
   ownPlaylistTrackIndexPromise = null
+  setLiveTagIndex(null)
   likedTrackIds = null
   likedTrackIdsPromise = null
+  playlistMembershipFilter = ''
 }
 
 function showOwnPlaylistTags(): boolean {
@@ -365,6 +394,38 @@ function visiblePlaylistTagRefs(trackId: string): PlaylistRef[] {
   const isArchived = detailViewOpts.isPlaylistArchived
   if (!isArchived) return refs
   return refs.filter((p) => !isArchived(p.id))
+}
+
+function playlistFilterOptions(): PlaylistRef[] {
+  if (!ownPlaylistTrackIndex) return []
+  const byId = new Map<string, PlaylistRef>()
+  const isArchived = detailViewOpts.isPlaylistArchived
+  for (const refs of ownPlaylistTrackIndex.values()) {
+    for (const ref of refs) {
+      if (isArchived?.(ref.id)) continue
+      byId.set(ref.id, ref)
+    }
+  }
+  return [...byId.values()].sort((a, b) =>
+    a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+  )
+}
+
+function matchesPlaylistFilter(trackId: string, row?: DisplayRow): boolean {
+  if (!playlistMembershipFilter) return true
+  if (groupByMode === 'playlist' && row) {
+    if (playlistMembershipFilter === PLAYLIST_FILTER_NONE) {
+      return row.playlistGroup == null
+    }
+    return row.playlistGroup?.id === playlistMembershipFilter
+  }
+  const refs = visiblePlaylistTagRefs(trackId)
+  if (playlistMembershipFilter === PLAYLIST_FILTER_NONE) return refs.length === 0
+  return refs.some((p) => p.id === playlistMembershipFilter)
+}
+
+function isPlaylistFilterActive(): boolean {
+  return Boolean(playlistMembershipFilter)
 }
 
 function isTrackLiked(trackId: string): boolean | null {
@@ -522,9 +583,17 @@ function ensureLikedTrackIds(
 }
 
 function ownPlaylistTagsHtml(trackId: string): string {
-  if (!showOwnPlaylistTags() || !ownPlaylistTrackIndex) return ''
+  if (
+    !showOwnPlaylistTags() ||
+    !ownPlaylistTrackIndex ||
+    groupByMode === 'playlist'
+  ) {
+    return ''
+  }
   const refs = visiblePlaylistTagRefs(trackId)
-  if (!refs.length) return ''
+  if (!refs.length) {
+    return `<span class="track-playlist-tags-empty">${escapeHtml(NOT_IN_ANY_PLAYLIST_LABEL)}</span>`
+  }
   const label = refs.map((p) => p.name).join(', ')
   return `
     <div class="track-playlist-tags" aria-label="In playlists: ${escapeHtml(label)}">
@@ -546,7 +615,10 @@ function ownPlaylistTagsHtml(trackId: string): string {
 
 function likedPlaylistTagsStatusHtml(): string {
   if (!showOwnPlaylistTags()) return ''
-  if (ownPlaylistTrackIndex) return ''
+  if (ownPlaylistTrackIndex) {
+    const playlistCount = playlistFilterOptions().length
+    return `<p class="detail-playlist-tags-status detail-playlist-tags-ready">Showing which of your ${playlistCount} own playlist${playlistCount === 1 ? '' : 's'} each track is in. Click a tag to open that playlist.</p>`
+  }
   if (ownPlaylistTrackIndexPromise) {
     return '<span class="detail-playlist-tags-status">Loading your playlists…</span>'
   }
@@ -570,6 +642,7 @@ function ensureOwnPlaylistTrackIndex(
   ownPlaylistTrackIndexPromise = load()
     .then((index) => {
       ownPlaylistTrackIndex = index
+      setLiveTagIndex(index)
       ownPlaylistTrackIndexPromise = null
       renderPlaylistDetail(root, playlist, entries, kind, market, onBack, onTracksUpdated)
       return index
@@ -590,8 +663,10 @@ function matchesTrackSearch(track: SpotifyTrack): boolean {
 }
 
 function filterDisplayRows(rows: DisplayRow[]): DisplayRow[] {
-  if (!trackSearchQuery.trim()) return rows
-  return rows.filter((row) => matchesTrackSearch(row.track))
+  return rows.filter(
+    (row) =>
+      matchesTrackSearch(row.track) && matchesPlaylistFilter(row.track.id, row)
+  )
 }
 
 async function loadAudioFeaturesIfNeeded(trackIds: string[]): Promise<string | null> {
@@ -615,7 +690,11 @@ function primaryArtist(track: SpotifyTrack): string {
   return track.artists[0]?.name ?? ''
 }
 
-function groupKey(groupBy: GroupByMode, track: SpotifyTrack): string {
+function groupKey(groupBy: GroupByMode, row: DisplayRow): string {
+  if (groupBy === 'playlist') {
+    return row.playlistGroup?.name ?? NOT_IN_ANY_PLAYLIST_LABEL
+  }
+  const track = row.track
   if (isArtistGroupBy(groupBy)) {
     return primaryArtist(track) || 'Unknown artist'
   }
@@ -629,9 +708,24 @@ function groupKey(groupBy: GroupByMode, track: SpotifyTrack): string {
   }
 }
 
-function sortGroupLabel(groupBy: GroupByMode, track: SpotifyTrack): string | null {
+function sortGroupLabel(groupBy: GroupByMode, row: DisplayRow): string | null {
   if (groupBy === 'none') return null
-  return groupKey(groupBy, track) || null
+  return groupKey(groupBy, row) || null
+}
+
+function expandRowsForPlaylistGrouping(rows: DisplayRow[]): DisplayRow[] {
+  const expanded: DisplayRow[] = []
+  for (const row of rows) {
+    const refs = visiblePlaylistTagRefs(row.track.id)
+    if (!refs.length) {
+      expanded.push({ ...row, playlistGroup: null })
+      continue
+    }
+    for (const ref of refs) {
+      expanded.push({ ...row, playlistGroup: ref })
+    }
+  }
+  return expanded
 }
 
 function groupSeparatorHtml(label: string): string {
@@ -775,8 +869,18 @@ function compareGroups(
   groupBy: GroupByMode,
   artistCounts: Map<string, number> | null
 ): number {
-  const keyA = groupKey(groupBy, a.track)
-  const keyB = groupKey(groupBy, b.track)
+  const keyA = groupKey(groupBy, a)
+  const keyB = groupKey(groupBy, b)
+
+  if (groupBy === 'playlist') {
+    if (keyA === NOT_IN_ANY_PLAYLIST_LABEL && keyB !== NOT_IN_ANY_PLAYLIST_LABEL) {
+      return 1
+    }
+    if (keyB === NOT_IN_ANY_PLAYLIST_LABEL && keyA !== NOT_IN_ANY_PLAYLIST_LABEL) {
+      return -1
+    }
+    return compareText(keyA, keyB)
+  }
 
   if (isArtistGroupBy(groupBy) && artistCounts) {
     const countA = artistCounts.get(keyA) ?? 0
@@ -1202,9 +1306,10 @@ function gridSizeControlsHtml(): string {
   `
 }
 
-function groupMenuHtml(): string {
+function groupMenuHtml(kind: PlaylistKind): string {
+  const options = groupByOptionsForView(kind)
   const activeLabel =
-    GROUP_BY_OPTIONS.find((o) => o.mode === groupByMode)?.label ?? 'No grouping'
+    options.find((o) => o.mode === groupByMode)?.label ?? 'No grouping'
 
   return `
     <div class="detail-sort detail-group-by" data-sort-open="false">
@@ -1219,8 +1324,9 @@ function groupMenuHtml(): string {
         <span class="detail-sort-chevron" aria-hidden="true">▾</span>
       </button>
       <div class="detail-sort-menu" role="listbox" aria-label="Group tracks" hidden>
-        ${GROUP_BY_OPTIONS.map(
-          (opt) => `
+        ${options
+          .map(
+            (opt) => `
           <button
             type="button"
             class="detail-sort-option ${opt.mode === groupByMode ? 'is-active' : ''}"
@@ -1232,7 +1338,8 @@ function groupMenuHtml(): string {
             <span>${escapeHtml(opt.label)}</span>
           </button>
         `
-        ).join('')}
+          )
+          .join('')}
       </div>
     </div>
   `
@@ -1282,7 +1389,7 @@ function listTracksHtml(rows: DisplayRow[], canEdit: boolean): string {
   let lastGroup: string | null = null
   const parts: string[] = []
   rows.forEach((row, i) => {
-    const group = sortGroupLabel(groupByMode, row.track)
+    const group = sortGroupLabel(groupByMode, row)
     if (group !== null && group !== lastGroup) {
       parts.push(groupSeparatorHtml(group))
       lastGroup = group
@@ -1337,7 +1444,7 @@ function groupedGridHtml(rows: DisplayRow[]): string {
   }
 
   rows.forEach((row, i) => {
-    const label = sortGroupLabel(groupByMode, row.track)
+    const label = sortGroupLabel(groupByMode, row)
     if (label !== currentLabel) {
       flush()
       currentLabel = label
@@ -1360,14 +1467,40 @@ function trackSearchHtml(): string {
         value="${escapeHtml(trackSearchQuery)}"
         aria-label="Search tracks in this playlist"
       />
+      ${playlistMembershipFilterHtml()}
     </div>
+  `
+}
+
+function playlistMembershipFilterHtml(): string {
+  if (!showOwnPlaylistTags() || !ownPlaylistTrackIndex) return ''
+  const options = playlistFilterOptions()
+  return `
+    <select
+      id="detail-playlist-filter"
+      class="detail-playlist-filter-select"
+      aria-label="Filter by playlist membership"
+    >
+      <option value=""${playlistMembershipFilter === '' ? ' selected' : ''}>All tracks</option>
+      <option value="${PLAYLIST_FILTER_NONE}"${playlistMembershipFilter === PLAYLIST_FILTER_NONE ? ' selected' : ''}>${escapeHtml(NOT_IN_ANY_PLAYLIST_LABEL)}</option>
+      ${options
+        .map(
+          (p) =>
+            `<option value="${p.id}"${playlistMembershipFilter === p.id ? ' selected' : ''}>${escapeHtml(p.name)}</option>`
+        )
+        .join('')}
+    </select>
   `
 }
 
 function trackSearchMetaHtml(visible: number, total: number): string {
   const q = trackSearchQuery.trim()
-  if (!q || visible === total) return ''
-  return `<p class="detail-track-search-meta">${visible} of ${total} track${total === 1 ? '' : 's'}</p>`
+  const filtered = isPlaylistFilterActive() || Boolean(q)
+  if (!filtered || visible === total) return ''
+  const parts: string[] = []
+  if (q) parts.push(`matching “${escapeHtml(q)}”`)
+  if (isPlaylistFilterActive()) parts.push('matching playlist filter')
+  return `<p class="detail-track-search-meta">${visible} of ${total} track${total === 1 ? '' : 's'} ${parts.join(' and ')}</p>`
 }
 
 function tracksSection(
@@ -1382,6 +1515,9 @@ function tracksSection(
   }
   if (!rows.length && trackSearchQuery.trim()) {
     return `<p class="empty">No tracks match “${escapeHtml(trackSearchQuery.trim())}”.</p>`
+  }
+  if (!rows.length && isPlaylistFilterActive()) {
+    return '<p class="empty">No tracks match this playlist filter.</p>'
   }
 
   if (viewMode === 'list') {
@@ -1716,6 +1852,24 @@ function bindTrackSearch(
   input.addEventListener('keydown', (e) => e.stopPropagation())
 }
 
+function bindPlaylistMembershipFilter(
+  root: HTMLElement,
+  playlist: SpotifyPlaylist,
+  entries: PlaylistTrackEntry[],
+  kind: PlaylistKind,
+  market: string,
+  onBack: () => void,
+  onTracksUpdated?: (entries: PlaylistTrackEntry[]) => void
+): void {
+  const select = root.querySelector<HTMLSelectElement>('#detail-playlist-filter')
+  if (!select) return
+
+  select.addEventListener('change', () => {
+    playlistMembershipFilter = select.value
+    renderPlaylistDetail(root, playlist, entries, kind, market, onBack, onTracksUpdated)
+  })
+}
+
 function bindRefreshPlaylist(
   root: HTMLElement,
   playlist: SpotifyPlaylist,
@@ -2033,6 +2187,28 @@ function showDetailNotice(root: HTMLElement, message: string, isError = false): 
   }, 6000)
 }
 
+function bindAnalyzePlaylist(root: HTMLElement): void {
+  if (analyzeClickBound) return
+  analyzeClickBound = true
+
+  root.addEventListener('click', (e) => {
+    const ctx = detailReplaceCtx
+    if (!ctx) return
+
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(
+      '#analyze-playlist-btn'
+    )
+    if (!btn) return
+    e.preventDefault()
+
+    runPlaylistAnalyzeFlow({
+      playlistName: ctx.playlist.name,
+      entries: ctx.entries,
+      onError: (msg) => showDetailNotice(root, msg, true),
+    })
+  })
+}
+
 function bindDetectDuplicates(root: HTMLElement): void {
   if (duplicateClickBound) return
   duplicateClickBound = true
@@ -2274,6 +2450,19 @@ export function renderPlaylistDetail(
   opts?: PlaylistDetailOpts
 ): void {
   detailRoot = root
+  onTagIndexPatched(() => {
+    const ctx = detailReplaceCtx
+    if (!detailRoot || ctx?.kind !== 'liked') return
+    renderPlaylistDetail(
+      detailRoot,
+      ctx.playlist,
+      ctx.entries,
+      ctx.kind,
+      ctx.market,
+      ctx.onBack,
+      ctx.onTracksUpdated
+    )
+  })
   ensureLikedHeartsPrefListener()
   if (opts) detailViewOpts = opts
   stopPreview()
@@ -2285,6 +2474,13 @@ export function renderPlaylistDetail(
   }
   resetSortState(playlist.id)
 
+  if (kind !== 'liked' && groupByMode === 'playlist') {
+    groupByMode = 'none'
+    sortMode = normalizeSortForGroupBy(groupByMode, sortMode)
+    localStorage.setItem(GROUP_BY_STORAGE_KEY, groupByMode)
+    localStorage.setItem(SORT_STORAGE_KEY, sortMode)
+  }
+
   const canEdit = kind !== 'followed' && kind !== 'liked'
   detailReplaceCtx = {
     playlist,
@@ -2295,18 +2491,24 @@ export function renderPlaylistDetail(
     onBack,
     onTracksUpdated,
   }
+  const baseRows: DisplayRow[] = entries.map((e) => ({
+    track: e.track,
+    playlistPosition: e.position,
+    addedAt: e.addedAt,
+  }))
+  const rowsForDisplay =
+    groupByMode === 'playlist' && kind === 'liked'
+      ? expandRowsForPlaylistGrouping(baseRows)
+      : baseRows
   const sortedRows = sortPlaylistRows(
-    entries.map((e) => ({
-      track: e.track,
-      playlistPosition: e.position,
-      addedAt: e.addedAt,
-    })),
+    rowsForDisplay,
     groupByMode,
     sortMode,
     audioFeaturesById
   )
   const displayRows = filterDisplayRows(sortedRows)
-  const totalTrackCount = sortedRows.length
+  const totalTrackCount = entries.length
+  const listTrackCount = sortedRows.length
 
   const cover = renderImg({
     images: playlist.images,
@@ -2424,9 +2626,16 @@ export function renderPlaylistDetail(
               aria-label="Detect duplicates"
               title="Find remixes, deluxe, live, and remastered versions of the same song"
             >${iconDuplicates(18)}</button>
+            <button
+              type="button"
+              class="btn-analyze-playlist btn-icon pill-btn"
+              id="analyze-playlist-btn"
+              aria-label="Analyze playlist"
+              title="Analyze genres, niche rating, and top artists"
+            >${iconChart(18)}</button>
             ${tagTogglesHtml()}
             ${gridSizeControlsHtml()}
-            ${groupMenuHtml()}
+            ${groupMenuHtml(kind)}
             ${sortMenuHtml()}
             ${previewSettingsControlsHtml()}
           </div>
@@ -2434,10 +2643,10 @@ export function renderPlaylistDetail(
           </div>
         </div>
         <div class="detail-tracks-body">
-        ${trackSearchMetaHtml(displayRows.length, totalTrackCount)}
+        ${trackSearchMetaHtml(displayRows.length, listTrackCount)}
         ${likedPlaylistTagsStatusHtml()}
         ${duplicatesBannerHtml()}
-        ${tracksSection(displayRows, null, canEdit, totalTrackCount)}
+        ${tracksSection(displayRows, null, canEdit, listTrackCount)}
         </div>
       </div>
     </div>
@@ -2466,6 +2675,15 @@ export function renderPlaylistDetail(
   })
 
   bindTrackSearch(root, playlist, entries, kind, market, onBack, onTracksUpdated)
+  bindPlaylistMembershipFilter(
+    root,
+    playlist,
+    entries,
+    kind,
+    market,
+    onBack,
+    onTracksUpdated
+  )
   bindRefreshPlaylist(
     root,
     playlist,
@@ -2482,6 +2700,7 @@ export function renderPlaylistDetail(
   bindTagToggles(root, playlist, entries, kind, market, onBack, onTracksUpdated)
   bindGridSizeControls(root, playlist, entries, kind, market, onBack, onTracksUpdated)
   bindDetectDuplicates(root)
+  bindAnalyzePlaylist(root)
   bindTrackReplace(root)
   bindLikedHeart(root)
   bindAddToPlaylist(root)
