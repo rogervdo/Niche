@@ -5,7 +5,6 @@ import { clearTrackMetaCache } from './trackMetaCache'
 
 const PLAYLISTS_KEY = 'niche_playlists_cache_v1'
 const TRACKS_KEY = 'niche_tracks_cache_v1'
-const TRACKS_LOCAL_KEY = 'niche_tracks_cache_local_v1'
 const TRACK_IDS_KEY = 'niche_playlist_track_ids_v1'
 export const PLAYLIST_CACHE_TTL_MS = 24 * 60 * 60 * 1000
 
@@ -72,61 +71,16 @@ function readTracksStoreFrom(storage: Storage, key: string): TracksCacheStore {
 
 function readTracksStore(): TracksCacheStore {
   if (memoryTracks) return memoryTracks
-
-  const session = readTracksStoreFrom(sessionStorage, TRACKS_KEY)
-  const local = readTracksStoreFrom(localStorage, TRACKS_LOCAL_KEY)
-  const merged: TracksCacheStore = { ...local }
-
-  for (const [k, sessionEntry] of Object.entries(session)) {
-    const localEntry = merged[k]
-    if (!localEntry || sessionEntry.fetchedAt >= localEntry.fetchedAt) {
-      merged[k] = sessionEntry
-    }
-  }
-
-  memoryTracks = merged
-  return merged
+  memoryTracks = readTracksStoreFrom(sessionStorage, TRACKS_KEY)
+  return memoryTracks
 }
 
 function writeTracksStore(store: TracksCacheStore): void {
   memoryTracks = store
-  const payload = JSON.stringify(store)
   try {
-    sessionStorage.setItem(TRACKS_KEY, payload)
+    sessionStorage.setItem(TRACKS_KEY, JSON.stringify(store))
   } catch {
     /* quota or private mode */
-  }
-  writeTracksWithEviction(store, payload, 0)
-}
-
-function writeTracksWithEviction(
-  store: TracksCacheStore,
-  payload: string,
-  attempts: number
-): void {
-  try {
-    localStorage.setItem(TRACKS_LOCAL_KEY, payload)
-  } catch {
-    if (attempts >= 2) {
-      console.warn('[cache] tracks localStorage write failed after eviction attempts')
-      return
-    }
-
-    try { localStorage.removeItem('niche_cart_v1') } catch { /* ignore */ }
-
-    const keys = Object.keys(store)
-    if (keys.length > 1) {
-      const evictCount = Math.ceil(keys.length / (3 - attempts))
-      keys
-        .sort((a, b) => (store[a]?.fetchedAt ?? 0) - (store[b]?.fetchedAt ?? 0))
-        .slice(0, evictCount)
-        .forEach((k) => delete store[k])
-      memoryTracks = store
-      const next = JSON.stringify(store)
-      writeTracksWithEviction(store, next, attempts + 1)
-    } else {
-      writeTracksWithEviction(store, payload, attempts + 1)
-    }
   }
 }
 
@@ -281,7 +235,7 @@ export function clearPlaylistCache(): void {
   try {
     sessionStorage.removeItem(PLAYLISTS_KEY)
     sessionStorage.removeItem(TRACKS_KEY)
-    localStorage.removeItem(TRACKS_LOCAL_KEY)
+    localStorage.removeItem('niche_tracks_cache_local_v1')
     localStorage.removeItem(TRACK_IDS_KEY)
   } catch {
     /* ignore */

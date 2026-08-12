@@ -74,17 +74,23 @@ function saveStoredTagIndex(
   fingerprint: string,
   index: Map<string, PlaylistRef[]>
 ): void {
+  const stored: StoredTagIndex = {
+    userId,
+    market,
+    fingerprint,
+    fetchedAt: Date.now(),
+    entries: [...index.entries()],
+  }
+  const payload = JSON.stringify(stored)
   try {
-    const stored: StoredTagIndex = {
-      userId,
-      market,
-      fingerprint,
-      fetchedAt: Date.now(),
-      entries: [...index.entries()],
-    }
-    localStorage.setItem(TAG_INDEX_STORAGE_KEY, JSON.stringify(stored))
+    localStorage.setItem(TAG_INDEX_STORAGE_KEY, payload)
   } catch {
-    /* quota */
+    try {
+      localStorage.removeItem('niche_cart_v1')
+      localStorage.setItem(TAG_INDEX_STORAGE_KEY, payload)
+    } catch {
+      /* quota */
+    }
   }
 }
 

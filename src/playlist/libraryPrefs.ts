@@ -53,7 +53,19 @@ export function loadLibraryPrefs(userId: string): LibraryPrefs {
 
 export function saveLibraryPrefs(userId: string, prefs: LibraryPrefs): void {
   if (!userId) return
-  localStorage.setItem(storageKey(userId), JSON.stringify(prefs))
+  const key = storageKey(userId)
+  const payload = JSON.stringify(prefs)
+  try {
+    localStorage.setItem(key, payload)
+  } catch {
+    try {
+      localStorage.removeItem('niche_cart_v1')
+      localStorage.removeItem('niche_tracks_cache_local_v1')
+      localStorage.setItem(key, payload)
+    } catch {
+      console.warn('[libraryPrefs] localStorage write failed after cleanup', key)
+    }
+  }
 }
 
 /** Sync prefs with the current Spotify library IDs. */
