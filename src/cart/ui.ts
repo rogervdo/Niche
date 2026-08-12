@@ -725,6 +725,12 @@ export function mountCartUI(context: CartUiContext): void {
   barEl.className = 'cart-bar'
   document.body.appendChild(barEl)
 
+  try {
+    localStorage.removeItem('niche_cart_v1')
+  } catch {
+    /* ignore */
+  }
+
   cartUnsubscribe?.()
   cartUnsubscribe = subscribeCart(() => {
     renderCartBar()

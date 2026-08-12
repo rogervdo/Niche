@@ -96,10 +96,37 @@ function writeTracksStore(store: TracksCacheStore): void {
   } catch {
     /* quota or private mode */
   }
+  writeTracksWithEviction(store, payload, 0)
+}
+
+function writeTracksWithEviction(
+  store: TracksCacheStore,
+  payload: string,
+  attempts: number
+): void {
   try {
     localStorage.setItem(TRACKS_LOCAL_KEY, payload)
   } catch {
-    /* quota */
+    if (attempts >= 2) {
+      console.warn('[cache] tracks localStorage write failed after eviction attempts')
+      return
+    }
+
+    try { localStorage.removeItem('niche_cart_v1') } catch { /* ignore */ }
+
+    const keys = Object.keys(store)
+    if (keys.length > 1) {
+      const evictCount = Math.ceil(keys.length / (3 - attempts))
+      keys
+        .sort((a, b) => (store[a]?.fetchedAt ?? 0) - (store[b]?.fetchedAt ?? 0))
+        .slice(0, evictCount)
+        .forEach((k) => delete store[k])
+      memoryTracks = store
+      const next = JSON.stringify(store)
+      writeTracksWithEviction(store, next, attempts + 1)
+    } else {
+      writeTracksWithEviction(store, payload, attempts + 1)
+    }
   }
 }
 
