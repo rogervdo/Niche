@@ -1,27 +1,49 @@
 import type { SpotifyTrack } from '../spotify/types'
 
-const STORAGE_KEY = 'niche_cart_v1'
+const STORAGE_KEY = 'niche_cart_v2'
+
+export interface CartEntry {
+  id: string
+  uri?: string
+  linked_from?: { uri?: string }
+  name: string
+  duration_ms: number
+  artists: { name: string }[]
+  album: { images: { url: string; width?: number | null; height?: number | null }[] | null }
+}
+
+export function toCartEntry(track: SpotifyTrack): CartEntry {
+  return {
+    id: track.id,
+    uri: track.uri,
+    linked_from: track.linked_from ? { uri: track.linked_from.uri } : undefined,
+    name: track.name,
+    duration_ms: track.duration_ms,
+    artists: track.artists.map((a) => ({ name: a.name })),
+    album: { images: track.album.images },
+  }
+}
 
 type Listener = () => void
 const listeners = new Set<Listener>()
 
-export function trackUri(track: SpotifyTrack): string {
+export function trackUri(track: CartEntry): string {
   if (track.linked_from?.uri) return track.linked_from.uri
   return track.uri ?? `spotify:track:${track.id}`
 }
 
-function readCart(): SpotifyTrack[] {
+function readCart(): CartEntry[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return []
-    const parsed = JSON.parse(raw) as SpotifyTrack[]
+    const parsed = JSON.parse(raw) as CartEntry[]
     return Array.isArray(parsed) ? parsed.filter((t) => t?.id) : []
   } catch {
     return []
   }
 }
 
-function writeCart(tracks: SpotifyTrack[]): void {
+function writeCart(tracks: CartEntry[]): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(tracks))
   } catch (err) {
@@ -38,7 +60,7 @@ export function subscribeCart(listener: Listener): () => void {
   return () => listeners.delete(listener)
 }
 
-export function getCartTracks(): SpotifyTrack[] {
+export function getCartTracks(): CartEntry[] {
   return readCart()
 }
 
@@ -53,7 +75,7 @@ export function isInCart(trackId: string): boolean {
 export function addToCart(track: SpotifyTrack): boolean {
   const tracks = readCart()
   if (tracks.some((t) => t.id === track.id)) return false
-  writeCart([...tracks, track])
+  writeCart([...tracks, toCartEntry(track)])
   notify()
   return true
 }

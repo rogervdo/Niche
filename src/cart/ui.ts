@@ -17,6 +17,7 @@ import {
   removeFromCart,
   subscribeCart,
 } from './cart'
+import type { CartEntry } from './cart'
 import type { SpotifyTrack } from '../spotify/types'
 import { iconCheck, iconPlus } from '../ui/icons'
 import { mountCartGlass, unmountCartGlass } from './glass'
@@ -280,11 +281,11 @@ function bindAlsoLikedCheckbox(overlay: HTMLElement): HTMLInputElement | null {
   return input
 }
 
-function tracksToUris(tracks: SpotifyTrack[]): string[] {
+function tracksToUris(tracks: CartEntry[]): string[] {
   return tracks.map((t) => `spotify:track:${t.id}`)
 }
 
-async function addTracksToLiked(tracks: SpotifyTrack[]): Promise<void> {
+async function addTracksToLiked(tracks: CartEntry[]): Promise<void> {
   const ids = tracks.map((t) => t.id)
   if (!ids.length || !ctx) return
   await saveTracksToLiked(ids, ctx.userId)
@@ -294,7 +295,7 @@ async function addCartTracksToLiked(): Promise<void> {
   await addTracksToLiked(getCartTracks())
 }
 
-function cartTrackRow(track: import('../spotify/types').SpotifyTrack): string {
+function cartTrackRow(track: CartEntry): string {
   const artists = track.artists.map((a) => a.name).join(', ')
   const art = renderImg({
     images: track.album.images,
@@ -568,7 +569,7 @@ export type AddTracksToPlaylistOpts = {
 }
 
 export function openAddTracksToPlaylistModal(
-  tracks: SpotifyTrack[],
+  tracks: CartEntry[],
   options?: AddTracksToPlaylistOpts
 ): void {
   const count = tracks.length
