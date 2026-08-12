@@ -63,6 +63,7 @@ let cartCollapsed = localStorage.getItem(CART_COLLAPSED_KEY) !== 'false'
 let trackResolver: ((trackId: string) => SpotifyTrack | null) | null = null
 let cartDropAbort: AbortController | null = null
 let cartClickBound = false
+let cartUnsubscribe: (() => void) | null = null
 
 export type CartTrackAction = {
   action: 'add' | 'remove'
@@ -134,7 +135,10 @@ function flashCartBar(): void {
 
 function tryAddTrackFromDrag(trackId: string): boolean {
   const track = trackResolver?.(trackId)
-  if (!track) return false
+  if (!track) {
+    console.warn('[cart] drag dropped ignored: trackResolver returned null for trackId', trackId)
+    return false
+  }
   if (isInCart(trackId)) return false
   addToCart(track)
   flashCartBar()
@@ -207,10 +211,13 @@ function bindGlobalCartClicks(): void {
     if (!trackId) return
 
     const track = trackResolver?.(trackId)
-    if (!track) return
+    if (!track) {
+      console.warn('[cart] click ignored: trackResolver returned null for trackId', trackId)
+      return
+    }
 
     const scope =
-      (btn.closest('.detail-view, .listening-browse, #app') as ParentNode | null) ??
+      (btn.closest('.detail-shell, .listening-browse, #app') as ParentNode | null) ??
       document
 
     if (isInCart(trackId)) {
@@ -717,7 +724,8 @@ export function mountCartUI(context: CartUiContext): void {
   barEl.className = 'cart-bar'
   document.body.appendChild(barEl)
 
-  subscribeCart(() => {
+  cartUnsubscribe?.()
+  cartUnsubscribe = subscribeCart(() => {
     renderCartBar()
     updateCartButtons()
   })
@@ -737,5 +745,7 @@ export function unmountCartUI(): void {
   trackResolver = null
   cartDropAbort?.abort()
   cartDropAbort = null
+  cartUnsubscribe?.()
+  cartUnsubscribe = null
   document.body.classList.remove('has-cart-bar', 'has-cart-bar-collapsed')
 }

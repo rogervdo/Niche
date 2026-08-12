@@ -24,8 +24,8 @@ function readCart(): SpotifyTrack[] {
 function writeCart(tracks: SpotifyTrack[]): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(tracks))
-  } catch {
-    /* quota or private mode */
+  } catch (err) {
+    console.warn('[cart] localStorage write failed', err)
   }
 }
 
