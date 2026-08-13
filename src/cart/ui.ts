@@ -62,6 +62,7 @@ let modalEl: HTMLElement | null = null
 /** Collapsed by default; set localStorage `niche_cart_collapsed` to `"false"` to stay expanded. */
 let cartCollapsed = localStorage.getItem(CART_COLLAPSED_KEY) !== 'false'
 let trackResolver: ((trackId: string) => SpotifyTrack | null) | null = null
+let selectedTracksResolver: (() => SpotifyTrack[]) | null = null
 let cartDropAbort: AbortController | null = null
 let cartClickBound = false
 let cartKeyAbort: AbortController | null = null
@@ -71,6 +72,8 @@ export type CartTrackAction = {
   action: 'add' | 'remove'
   track: SpotifyTrack
   el: HTMLElement
+  /** Number of tracks affected (bulk cart actions). */
+  count?: number
 }
 
 let onCartTrackAction: ((ev: CartTrackAction) => void) | null = null
@@ -80,6 +83,13 @@ export function setCartTrackActionHandler(
   handler: ((ev: CartTrackAction) => void) | null
 ): void {
   onCartTrackAction = handler
+}
+
+/** Injected by the playlist detail view so cart shortcuts can act on the current selection. */
+export function setSelectedTracksResolver(
+  resolver: (() => SpotifyTrack[]) | null
+): void {
+  selectedTracksResolver = resolver
 }
 
 function dragHasTrackType(dt: DataTransfer | null): boolean {
@@ -214,6 +224,34 @@ function toggleTrackCart(trackId: string, sourceEl: HTMLElement, scope: ParentNo
   updateCartButtons(scope)
 }
 
+function toggleTracksCart(tracks: SpotifyTrack[], sourceEl: HTMLElement, scope: ParentNode = document): void {
+  if (!tracks.length) return
+
+  const allInCart = tracks.every((t) => isInCart(t.id))
+  if (allInCart) {
+    for (const t of tracks) removeFromCart(t.id)
+    onCartTrackAction?.({
+      action: 'remove',
+      track: tracks[0],
+      el: sourceEl,
+      count: tracks.length,
+    })
+  } else {
+    let added = 0
+    for (const t of tracks) {
+      if (addToCart(t)) added += 1
+    }
+    if (added) flashCartBar()
+    onCartTrackAction?.({
+      action: 'add',
+      track: tracks[0],
+      el: sourceEl,
+      count: added,
+    })
+  }
+  updateCartButtons(scope)
+}
+
 function bindGlobalCartClicks(): void {
   if (cartClickBound) return
   cartClickBound = true
@@ -256,6 +294,13 @@ function bindGlobalCartKeyShortcut(): void {
       if (e.key !== 'c') return
       if (e.ctrlKey || e.metaKey || e.altKey) return
       if (isEditableTarget(e.target)) return
+
+      const selected = selectedTracksResolver?.() ?? []
+      if (selected.length > 1) {
+        e.preventDefault()
+        toggleTracksCart(selected, e.target as HTMLElement)
+        return
+      }
 
       const el = (e.target as HTMLElement | null)?.closest<HTMLElement>(
         '.btn-add-cart[data-track-id], .track-row[data-track-id], .album-cell[data-track-id]'

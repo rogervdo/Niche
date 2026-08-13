@@ -46,6 +46,7 @@ import {
   openAddTracksToPlaylistModal,
   setCartTrackActionHandler,
   setCartTrackResolver,
+  setSelectedTracksResolver,
   updateCartButtons,
 } from '../cart/ui'
 import { mountBarGlass, unmountBarGlass } from '../cart/glass'
@@ -358,8 +359,17 @@ const likedTogglePending = new Set<string>()
 let detailRoot: HTMLElement | null = null
 let likedHeartsPrefListenerBound = false
 
-setCartTrackActionHandler(({ action, track, el }) => {
+setCartTrackActionHandler(({ action, track, el, count }) => {
   if (!detailRoot?.contains(el)) return
+  if (count != null && count > 1) {
+    showDetailNotice(
+      detailRoot,
+      action === 'add'
+        ? `Added ${count} tracks to cart.`
+        : `Removed ${count} tracks from cart.`
+    )
+    return
+  }
   if (action === 'add') {
     showDetailNotice(detailRoot, `Added “${track.name}” to cart.`)
   } else {
@@ -2870,10 +2880,12 @@ export function renderPlaylistDetail(
   `
 
   setCartTrackResolver((id) => entries.find((en) => en.track.id === id)?.track ?? null)
+  setSelectedTracksResolver(() => selectedTracks())
 
   root.querySelector('#back-btn')!.addEventListener('click', () => {
     stopPreview()
     setCartTrackResolver(null)
+    setSelectedTracksResolver(null)
     onBack()
   })
 
