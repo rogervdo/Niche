@@ -64,6 +64,7 @@ let cartCollapsed = localStorage.getItem(CART_COLLAPSED_KEY) !== 'false'
 let trackResolver: ((trackId: string) => SpotifyTrack | null) | null = null
 let cartDropAbort: AbortController | null = null
 let cartClickBound = false
+let cartKeyAbort: AbortController | null = null
 let cartUnsubscribe: (() => void) | null = null
 
 export type CartTrackAction = {
@@ -196,6 +197,23 @@ function bindCartDropZone(el: HTMLElement): void {
   )
 }
 
+function toggleTrackCart(trackId: string, sourceEl: HTMLElement, scope: ParentNode = document): void {
+  const track = trackResolver?.(trackId)
+  if (!track) {
+    console.warn('[cart] ignored: trackResolver returned null for trackId', trackId)
+    return
+  }
+
+  if (isInCart(trackId)) {
+    removeFromCart(trackId)
+    onCartTrackAction?.({ action: 'remove', track, el: sourceEl })
+  } else if (addToCart(track)) {
+    flashCartBar()
+    onCartTrackAction?.({ action: 'add', track, el: sourceEl })
+  }
+  updateCartButtons(scope)
+}
+
 function bindGlobalCartClicks(): void {
   if (cartClickBound) return
   cartClickBound = true
@@ -211,25 +229,46 @@ function bindGlobalCartClicks(): void {
     const trackId = btn.dataset.trackId
     if (!trackId) return
 
-    const track = trackResolver?.(trackId)
-    if (!track) {
-      console.warn('[cart] click ignored: trackResolver returned null for trackId', trackId)
-      return
-    }
-
     const scope =
       (btn.closest('.detail-shell, .listening-browse, #app') as ParentNode | null) ??
       document
 
-    if (isInCart(trackId)) {
-      removeFromCart(trackId)
-      onCartTrackAction?.({ action: 'remove', track, el: btn })
-    } else if (addToCart(track)) {
-      flashCartBar()
-      onCartTrackAction?.({ action: 'add', track, el: btn })
-    }
-    updateCartButtons(scope)
+    toggleTrackCart(trackId, btn, scope)
   })
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  if (target.isContentEditable) return true
+  const tag = target.tagName
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+}
+
+/** Press `c` to add the focused track to the cart (or remove it if already present). */
+function bindGlobalCartKeyShortcut(): void {
+  cartKeyAbort?.abort()
+  const ac = new AbortController()
+  cartKeyAbort = ac
+
+  document.addEventListener(
+    'keydown',
+    (e) => {
+      if (e.key !== 'c') return
+      if (e.ctrlKey || e.metaKey || e.altKey) return
+      if (isEditableTarget(e.target)) return
+
+      const el = (e.target as HTMLElement | null)?.closest<HTMLElement>(
+        '.btn-add-cart[data-track-id], .track-row[data-track-id], .album-cell[data-track-id]'
+      )
+      if (!el) return
+      const trackId = el.dataset.trackId
+      if (!trackId) return
+
+      e.preventDefault()
+      toggleTrackCart(trackId, el)
+    },
+    { signal: ac.signal }
+  )
 }
 
 function editablePlaylists(): SpotifyPlaylist[] {
@@ -738,6 +777,7 @@ export function mountCartUI(context: CartUiContext): void {
   })
 
   bindGlobalCartClicks()
+  bindGlobalCartKeyShortcut()
   bindCartDropZone(barEl)
   applyCartBarBodyClass()
   renderCartBar()
@@ -752,6 +792,8 @@ export function unmountCartUI(): void {
   trackResolver = null
   cartDropAbort?.abort()
   cartDropAbort = null
+  cartKeyAbort?.abort()
+  cartKeyAbort = null
   cartUnsubscribe?.()
   cartUnsubscribe = null
   document.body.classList.remove('has-cart-bar', 'has-cart-bar-collapsed')

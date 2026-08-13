@@ -1043,6 +1043,14 @@ code {
   background: color-mix(in srgb, var(--cart-mark) 14%, var(--surface));
 }
 
+.track-row-selected {
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+}
+
+.track-row-selected:hover {
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+}
+
 .track-open {
   display: grid;
   grid-template-columns: 40px 1fr;
@@ -1728,6 +1736,50 @@ code {
   font-style: italic;
 }
 
+.track-row-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  margin-top: 0.15rem;
+}
+
+.track-row-badge {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  padding: 0.05rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.68rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.track-row-badge-label {
+  font-weight: 500;
+  font-size: 0.62rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.track-row-badge--pop {
+  color: color-mix(in srgb, var(--accent) 78%, var(--text));
+}
+
+.track-row-badge--released {
+  color: var(--text);
+}
+
+.track-row-badge--added {
+  color: var(--muted);
+}
+
 .detail-playlist-tags-status {
   display: block;
   margin: 0.35rem 0 0.75rem;
@@ -1951,6 +2003,11 @@ code {
 .album-cell-in-cart:not(.album-cell-active) {
   border-color: var(--cart-mark);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--cart-mark) 42%, transparent);
+}
+
+.album-cell-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
 }
 
 .album-cell .btn-track-liked {
@@ -2461,6 +2518,47 @@ code {
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+.detail-selection-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin: -0.5rem 0 1rem;
+  padding: 0.55rem 0.85rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+.detail-selection-count {
+  font-weight: 600;
+}
+
+.btn-selection-action,
+.btn-selection-clear {
+  appearance: none;
+  border: none;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-selection-action {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.btn-selection-clear {
+  margin-left: auto;
+  color: var(--muted);
+  font-weight: 500;
 }
 
 .track-row-duplicate {

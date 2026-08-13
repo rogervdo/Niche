@@ -40,7 +40,7 @@ import { runTrackReplaceFlow } from './trackReplace'
 import { runDuplicateDetectFlow } from './detectDuplicates'
 import { runPlaylistAnalyzeFlow } from './analyzePlaylist'
 import { duplicateTrackIds } from '../spotify/trackDuplicates'
-import { isInCart } from '../cart/cart'
+import { addToCart, isInCart } from '../cart/cart'
 import {
   bindTrackDragSource,
   openAddTracksToPlaylistModal,
@@ -307,6 +307,8 @@ let highlightedDuplicateIds: Set<string> | null = null
 let trackSearchQuery = ''
 const PLAYLIST_FILTER_NONE = '__niche_not_in_any_playlist__'
 let playlistMembershipFilter = ''
+let selectedTrackIds = new Set<string>()
+let selectionAnchorId: string | null = null
 
 function loadToolbarCollapsed(): boolean {
   try {
@@ -344,6 +346,8 @@ let replaceClickBound = false
 let addToPlaylistClickBound = false
 let duplicateClickBound = false
 let analyzeClickBound = false
+let selectionActionsBound = false
+let selectionEscapeBound = false
 let ownPlaylistTrackIndex: Map<string, PlaylistRef[]> | null = null
 let ownPlaylistTrackIndexPromise: Promise<Map<string, PlaylistRef[]>> | null = null
 let ownPlaylistTagsClickBound = false
@@ -381,10 +385,181 @@ function forceResetDetailData(): void {
   likedTrackIds = null
   likedTrackIdsPromise = null
   playlistMembershipFilter = ''
+  selectedTrackIds = new Set()
+  selectionAnchorId = null
 }
 
 function showOwnPlaylistTags(): boolean {
   return detailReplaceCtx?.kind === 'liked'
+}
+
+function isTrackSelected(trackId: string): boolean {
+  return selectedTrackIds.has(trackId)
+}
+
+function clearTrackSelection(): void {
+  selectedTrackIds = new Set()
+  selectionAnchorId = null
+}
+
+function applySelectionForClick(
+  trackId: string,
+  rows: DisplayRow[],
+  e: MouseEvent
+): void {
+  const toggle = e.metaKey || e.ctrlKey
+  const shift = e.shiftKey
+  if (toggle) {
+    if (selectedTrackIds.has(trackId)) selectedTrackIds.delete(trackId)
+    else selectedTrackIds.add(trackId)
+    selectionAnchorId = trackId
+    return
+  }
+  if (shift) {
+    const idx = rows.findIndex((r) => r.track.id === trackId)
+    if (idx < 0) return
+    const anchorIdx = selectionAnchorId
+      ? rows.findIndex((r) => r.track.id === selectionAnchorId)
+      : -1
+    const base = anchorIdx >= 0 ? anchorIdx : idx
+    const from = Math.min(base, idx)
+    const to = Math.max(base, idx)
+    const next = new Set<string>()
+    for (let i = from; i <= to; i++) next.add(rows[i].track.id)
+    selectedTrackIds = next
+    return
+  }
+  selectedTrackIds = new Set([trackId])
+  selectionAnchorId = trackId
+}
+
+function selectedTracks(): SpotifyTrack[] {
+  const ctx = detailReplaceCtx
+  if (!ctx) return []
+  const byId = new Map(ctx.entries.map((en) => [en.track.id, en.track]))
+  const tracks: SpotifyTrack[] = []
+  for (const id of selectedTrackIds) {
+    const track = byId.get(id)
+    if (track) tracks.push(track)
+  }
+  return tracks
+}
+
+function syncSelectionClasses(root: HTMLElement): void {
+  root
+    .querySelectorAll<HTMLElement>('.track-row[data-track-id]')
+    .forEach((el) => {
+      el.classList.toggle(
+        'track-row-selected',
+        isTrackSelected(el.dataset.trackId ?? '')
+      )
+    })
+  root
+    .querySelectorAll<HTMLElement>('.album-cell[data-track-id]')
+    .forEach((el) => {
+      el.classList.toggle(
+        'album-cell-selected',
+        isTrackSelected(el.dataset.trackId ?? '')
+      )
+    })
+}
+
+function selectionBarHtml(): string {
+  const count = selectedTrackIds.size
+  return `
+    <div class="detail-selection-bar" role="status" aria-live="polite">
+      <span class="detail-selection-count">${count} selected</span>
+      <button type="button" class="btn-selection-action" data-selection-action="cart">Add to cart</button>
+      <button type="button" class="btn-selection-action" data-selection-action="playlist">Add to playlist</button>
+      <button type="button" class="btn-selection-clear" data-selection-action="clear">Clear</button>
+    </div>
+  `
+}
+
+function syncSelectionBar(root: HTMLElement): void {
+  const host = root.querySelector<HTMLElement>('.detail-selection-bar-host')
+  if (!host) return
+  host.innerHTML = selectedTrackIds.size ? selectionBarHtml() : ''
+}
+
+function refreshSelectionUi(root: HTMLElement): void {
+  syncSelectionClasses(root)
+  syncSelectionBar(root)
+}
+
+function bindSelectionActions(root: HTMLElement): void {
+  if (selectionActionsBound) return
+  selectionActionsBound = true
+
+  root.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(
+      '[data-selection-action]'
+    )
+    if (!btn) return
+    e.preventDefault()
+    e.stopPropagation()
+
+    const action = btn.dataset.selectionAction
+    if (action === 'clear') {
+      clearTrackSelection()
+      refreshSelectionUi(root)
+      return
+    }
+
+    const tracks = selectedTracks()
+    if (!tracks.length) return
+
+    if (action === 'cart') {
+      let added = 0
+      for (const track of tracks) {
+        if (addToCart(track)) added += 1
+      }
+      showDetailNotice(
+        root,
+        added
+          ? `Added ${added} track${added === 1 ? '' : 's'} to cart.`
+          : 'Selected tracks are already in the cart.'
+      )
+    } else if (action === 'playlist') {
+      openAddTracksToPlaylistModal(tracks, {
+        onSuccess: (playlistName) => {
+          showDetailNotice(
+            root,
+            `Added ${tracks.length} track${tracks.length === 1 ? '' : 's'} to “${playlistName}”.`
+          )
+        },
+      })
+    }
+  })
+}
+
+function bindSelectionEscape(root: HTMLElement): void {
+  if (selectionEscapeBound) return
+  selectionEscapeBound = true
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return
+    if (!selectedTrackIds.size) return
+    clearTrackSelection()
+    if (document.body.contains(root)) refreshSelectionUi(root)
+  })
+}
+
+function bindListSelection(root: HTMLElement, rows: DisplayRow[]): void {
+  root.querySelectorAll<HTMLElement>('.track-row[data-track-id]').forEach((row) => {
+    const trackId = row.dataset.trackId
+    if (!trackId) return
+    row.addEventListener('click', (e) => {
+      if (e.defaultPrevented) return
+      const target = e.target as HTMLElement
+      const modifier = e.shiftKey || e.ctrlKey || e.metaKey
+      if (target.closest('button, input, select')) return
+      const link = target.closest('a')
+      if (link && !modifier) return
+      if (link && modifier) e.preventDefault()
+      applySelectionForClick(trackId, rows, e)
+      refreshSelectionUi(root)
+    })
+  })
 }
 
 function visiblePlaylistTagRefs(trackId: string): PlaylistRef[] {
@@ -993,6 +1168,33 @@ function artBadgesHtml(track: SpotifyTrack, row: DisplayRow): string {
   return `<div class="track-art-badges">${parts.join('')}</div>`
 }
 
+function trackRowBadgesHtml(track: SpotifyTrack, row: DisplayRow): string {
+  const parts: string[] = []
+  if (tagOverlayPrefs.popularity && track.popularity != null) {
+    parts.push(
+      `<span class="track-row-badge track-row-badge--pop" aria-label="Popularity ${track.popularity}"><span class="track-row-badge-label">Pop</span>${track.popularity}</span>`
+    )
+  }
+  if (tagOverlayPrefs.releaseDate) {
+    const year = releaseYear(track.album.release_date)
+    if (year) {
+      parts.push(
+        `<span class="track-row-badge track-row-badge--released" aria-label="Release year ${year}"><span class="track-row-badge-label">Released</span>${year}</span>`
+      )
+    }
+  }
+  if (tagOverlayPrefs.addedAt) {
+    const label = formatAddedAt(row.addedAt)
+    if (label) {
+      parts.push(
+        `<span class="track-row-badge track-row-badge--added" aria-label="Added ${escapeHtml(label)}"><span class="track-row-badge-label">Added</span>${escapeHtml(label)}</span>`
+      )
+    }
+  }
+  if (!parts.length) return ''
+  return `<div class="track-row-badges">${parts.join('')}</div>`
+}
+
 function addToCartButtonHtml(track: SpotifyTrack): string {
   const inCart = isInCart(track.id)
   return `
@@ -1058,10 +1260,11 @@ function trackRow(row: DisplayRow, index: number, canEdit: boolean): string {
   const dupClass = isDuplicateHighlight(track.id) ? ' track-row-duplicate' : ''
   const inCart = isInCart(track.id)
   const inCartClass = inCart ? ' track-row-in-cart' : ''
+  const selectedClass = isTrackSelected(track.id) ? ' track-row-selected' : ''
 
   return `
     <div
-      class="track-row${dupClass}${inCartClass}"
+      class="track-row${dupClass}${inCartClass}${selectedClass}"
       data-track-id="${track.id}"
       draggable="true"
     >
@@ -1069,11 +1272,11 @@ function trackRow(row: DisplayRow, index: number, canEdit: boolean): string {
       <a class="track-open" href="${spotifyTrackOpenUrl(track)}" target="_blank" rel="noreferrer" draggable="false">
         <div class="track-art">
           ${art || `<span class="track-art-placeholder">♪</span>`}
-          ${artBadgesHtml(track, row)}
         </div>
         <div class="track-info">
           <span class="track-name">${escapeHtml(track.name)}</span>
           <span class="track-artists">${escapeHtml(artists)} · ${escapeHtml(track.album.name)}</span>
+          ${trackRowBadgesHtml(track, row)}
           ${ownPlaylistTagsHtml(track.id)}
         </div>
       </a>
@@ -1113,9 +1316,11 @@ function albumCell(row: DisplayRow, index: number): string {
   const inCart = isInCart(track.id)
   const inCartClass = inCart ? ' album-cell-in-cart' : ''
 
+  const selectedClass = isTrackSelected(track.id) ? ' album-cell-selected' : ''
+
   return `
     <div
-      class="album-cell${dupClass}${inCartClass}"
+      class="album-cell${dupClass}${inCartClass}${selectedClass}"
       role="button"
       tabindex="0"
       data-track-index="${index}"
@@ -1728,17 +1933,28 @@ function bindGridPreview(
     cell.addEventListener('click', (e) => {
       if (suppressClick) return
       e.stopPropagation()
-      if (pinnedIndex === index) {
-        clearSelection()
-        return
+      const toggle = e.metaKey || e.ctrlKey
+      const shift = e.shiftKey
+      if (!toggle && !shift) {
+        if (pinnedIndex === index) {
+          clearSelection()
+          clearTrackSelection()
+          refreshSelectionUi(root)
+          return
+        }
+        selectTrack(index, true)
       }
-      selectTrack(index, true)
+      applySelectionForClick(track.id, rows, e)
+      refreshSelectionUi(root)
     })
 
     cell.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' && e.key !== ' ') return
       e.preventDefault()
       selectTrack(index, true)
+      selectedTrackIds = new Set([track.id])
+      selectionAnchorId = track.id
+      refreshSelectionUi(root)
     })
   })
 
@@ -2646,6 +2862,7 @@ export function renderPlaylistDetail(
         ${trackSearchMetaHtml(displayRows.length, listTrackCount)}
         ${likedPlaylistTagsStatusHtml()}
         ${duplicatesBannerHtml()}
+        <div class="detail-selection-bar-host"></div>
         ${tracksSection(displayRows, null, canEdit, listTrackCount)}
         </div>
       </div>
@@ -2705,6 +2922,8 @@ export function renderPlaylistDetail(
   bindLikedHeart(root)
   bindAddToPlaylist(root)
   bindOwnPlaylistTags(root)
+  bindSelectionActions(root)
+  bindSelectionEscape(root)
   updateCartButtons(root)
   updateLikedHearts(root)
 
@@ -2740,9 +2959,11 @@ export function renderPlaylistDetail(
     groupedGridSepObserver = null
     if (viewMode === 'list' && displayRows.length) {
       bindListTrackDrag(root, displayRows)
+      bindListSelection(root, displayRows)
     }
   }
   bindPreviewSettings(root)
+  syncSelectionBar(root)
 
   const trackIds = entries.map((e) => e.track.id)
   if (
