@@ -1,12 +1,18 @@
 import { measurePreviewGain } from './previewLoudness'
 import { tuningToAnalyser } from './previewVisualizerTuning'
+import { BoundedMap } from '../util/boundedMap'
 
 const PREVIEW_DURATION_MS = 20_000
+const PREVIEW_TIMEOUT_MS = 8000
 /** Master level for previews before per-track loudness adjustment. */
 const PREVIEW_VOLUME = 0.72
+const PREVIEW_CACHE_MAX = 200
 
-const audioBlobUrlBySource = new Map<string, string>()
-const playbackGainBySource = new Map<string, number>()
+const audioBlobUrlBySource = new BoundedMap<string, string>(
+  PREVIEW_CACHE_MAX,
+  (url) => URL.revokeObjectURL(url)
+)
+const trackGainBySource = new BoundedMap<string, number>(PREVIEW_CACHE_MAX)
 const audioFetchInFlight = new Map<string, Promise<string>>()
 
 let audioEl: HTMLAudioElement | null = null
@@ -72,19 +78,14 @@ export function isPreviewPlaying(): boolean {
   return Boolean(audioEl && !audioEl.paused && !audioEl.ended && audioEl.currentTime > 0)
 }
 
-function applyPlaybackLevel(linearGain: number): void {
-  const level = Math.min(1, Math.max(0, linearGain))
-  if (gainNode) {
-    gainNode.gain.value = level
-  } else if (audioEl) {
-    audioEl.volume = level
-  }
-}
-
 function applyCurrentGain(previewUrl: string): void {
-  const gain = playbackGainBySource.get(previewUrl) ?? PREVIEW_VOLUME
-  applyPlaybackLevel(gain)
-  if (audioEl) audioEl.volume = gain
+  const trackGain = trackGainBySource.get(previewUrl) ?? 1
+  if (gainNode) {
+    gainNode.gain.value = trackGain
+    if (audioEl) audioEl.volume = PREVIEW_VOLUME
+  } else if (audioEl) {
+    audioEl.volume = Math.min(1, Math.max(0, PREVIEW_VOLUME * trackGain))
+  }
 }
 
 function ensureAudio(): HTMLAudioElement {
@@ -132,7 +133,7 @@ async function cachedPlaybackUrl(previewUrl: string): Promise<string> {
     const blob = await res.blob()
     const objectUrl = URL.createObjectURL(blob)
     audioBlobUrlBySource.set(previewUrl, objectUrl)
-    playbackGainBySource.set(previewUrl, PREVIEW_VOLUME)
+    trackGainBySource.set(previewUrl, 1)
     void applyMeasuredGain(previewUrl, blob)
     return objectUrl
   })().finally(() => {
@@ -145,8 +146,7 @@ async function cachedPlaybackUrl(previewUrl: string): Promise<string> {
 
 async function applyMeasuredGain(previewUrl: string, blob: Blob): Promise<void> {
   const trackGain = await measurePreviewGain(blob, previewUrl)
-  const gain = PREVIEW_VOLUME * trackGain
-  playbackGainBySource.set(previewUrl, gain)
+  trackGainBySource.set(previewUrl, trackGain)
   if (currentSourceUrl === previewUrl) applyCurrentGain(previewUrl)
 }
 
@@ -168,6 +168,40 @@ export function stopPreview(): void {
 export type PlayPreviewOptions = {
   /** When true, abort before starting playback (e.g. hover ended while loading). */
   isCancelled?: () => boolean
+}
+
+function waitForCanPlay(
+  audio: HTMLAudioElement,
+  timeoutMs: number
+): Promise<void> {
+  if (audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
+    return Promise.resolve()
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup()
+      reject(new Error('Preview timed out'))
+    }, timeoutMs)
+
+    const onReady = (): void => {
+      clearTimeout(timeout)
+      cleanup()
+      resolve()
+    }
+    const onError = (): void => {
+      clearTimeout(timeout)
+      cleanup()
+      reject(new Error('Preview failed to load'))
+    }
+    const cleanup = (): void => {
+      audio.removeEventListener('canplay', onReady)
+      audio.removeEventListener('error', onError)
+    }
+    audio.addEventListener('canplay', onReady, { once: true })
+    audio.addEventListener('error', onError, { once: true })
+    audio.load()
+  })
 }
 
 export async function playPreview(
@@ -198,30 +232,7 @@ export async function playPreview(
 
   try {
     if (audio.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
-      await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          cleanup()
-          reject(new Error('Preview timed out'))
-        }, 8000)
-
-        const onReady = (): void => {
-          clearTimeout(timeout)
-          cleanup()
-          resolve()
-        }
-        const onError = (): void => {
-          clearTimeout(timeout)
-          cleanup()
-          reject(new Error('Preview failed to load'))
-        }
-        const cleanup = (): void => {
-          audio.removeEventListener('canplay', onReady)
-          audio.removeEventListener('error', onError)
-        }
-        audio.addEventListener('canplay', onReady, { once: true })
-        audio.addEventListener('error', onError, { once: true })
-        audio.load()
-      })
+      await waitForCanPlay(audio, PREVIEW_TIMEOUT_MS)
     }
 
     if (isCancelled()) {

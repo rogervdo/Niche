@@ -5,10 +5,17 @@ const TRACK_DETAILS_KEY = 'niche_track_details_v1'
 const AUDIO_FEATURES_KEY = 'niche_audio_features_v1'
 const PREVIEW_URLS_KEY = 'niche_preview_urls_v1'
 
+/** How long a cached "no preview" (null) result stays valid. */
+const NEGATIVE_PREVIEW_TTL_MS = 5 * 60 * 1000
+
 type Timestamped<T> = { value: T; fetchedAt: number }
 
 function isFresh(fetchedAt: number): boolean {
   return Date.now() - fetchedAt < PLAYLIST_CACHE_TTL_MS
+}
+
+function isFreshWithin(fetchedAt: number, ttl: number): boolean {
+  return Date.now() - fetchedAt < ttl
 }
 
 function readStore<T>(key: string): Record<string, Timestamped<T>> {
@@ -71,10 +78,16 @@ export function setCachedAudioFeatures(features: Iterable<AudioFeatures>): void 
   writeStore(AUDIO_FEATURES_KEY, store)
 }
 
-/** `undefined` = not cached. Only successful URLs are persisted. */
+/**
+ * `undefined` = not cached. `null` = cached miss (no preview), persisted with
+ * a shorter TTL so transient failures don't stick.
+ */
 export function getCachedPreviewUrl(trackId: string): string | null | undefined {
   const entry = readStore<string | null>(PREVIEW_URLS_KEY)[trackId]
-  if (!entry || !isFresh(entry.fetchedAt) || entry.value == null) return undefined
+  if (!entry) return undefined
+  const ttl =
+    entry.value == null ? NEGATIVE_PREVIEW_TTL_MS : PLAYLIST_CACHE_TTL_MS
+  if (!isFreshWithin(entry.fetchedAt, ttl)) return undefined
   return entry.value
 }
 

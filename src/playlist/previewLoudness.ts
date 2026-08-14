@@ -1,15 +1,20 @@
+import { BoundedMap } from '../util/boundedMap'
+
 /** Target RMS for 30s previews (~−19 dBFS); tames hot masters without over-boosting quiet clips. */
 const TARGET_RMS = 0.11
 const MIN_GAIN = 0.4
 const MAX_GAIN = 1.75
+/** Only the first 12s are representative enough to measure; avoids scanning the whole clip. */
+const RMS_WINDOW_SAMPLES = 44100 * 12
+const GAIN_CACHE_MAX = 200
 
 function computeRms(buffer: AudioBuffer): number {
   let sumSq = 0
   let count = 0
-  const stride = buffer.length > 44100 * 12 ? 4 : 1
+  const length = Math.min(buffer.length, RMS_WINDOW_SAMPLES)
   for (let c = 0; c < buffer.numberOfChannels; c++) {
     const data = buffer.getChannelData(c)
-    for (let i = 0; i < buffer.length; i += stride) {
+    for (let i = 0; i < length; i++) {
       const s = data[i] ?? 0
       sumSq += s * s
       count++
@@ -19,7 +24,7 @@ function computeRms(buffer: AudioBuffer): number {
 }
 
 let decodeContext: AudioContext | null = null
-const gainCache = new Map<string, number>()
+const gainCache = new BoundedMap<string, number>(GAIN_CACHE_MAX)
 
 function ensureDecodeContext(): AudioContext {
   if (!decodeContext) decodeContext = new AudioContext()

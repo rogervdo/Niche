@@ -1,30 +1,7 @@
 import { Router } from 'express'
+import { extractPreviewFromEmbedHtml } from '../services/embedPreview.js'
 
 export const previewRouter = Router()
-
-function extractPreviewFromEmbed(html: string): string | null {
-  const match = html.match(
-    /<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/
-  )
-  if (!match?.[1]) return null
-
-  try {
-    const json = JSON.parse(match[1]) as {
-      props?: {
-        pageProps?: {
-          state?: {
-            data?: {
-              entity?: { audioPreview?: { url?: string } }
-            }
-          }
-        }
-      }
-    }
-    return json.props?.pageProps?.state?.data?.entity?.audioPreview?.url ?? null
-  } catch {
-    return null
-  }
-}
 
 async function fetchPreviewForTrack(trackId: string): Promise<string | null> {
   const embedRes = await fetch(
@@ -40,7 +17,7 @@ async function fetchPreviewForTrack(trackId: string): Promise<string | null> {
 
   if (!embedRes.ok) return null
   const html = await embedRes.text()
-  return extractPreviewFromEmbed(html)
+  return extractPreviewFromEmbedHtml(html)
 }
 
 previewRouter.get('/:trackId', async (req, res) => {

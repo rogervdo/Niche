@@ -2,43 +2,21 @@ import {
   getCachedPreviewUrl,
   setCachedPreviewUrl,
 } from './trackMetaCache'
+import { extractPreviewFromEmbedHtml } from '../../backend/src/services/embedPreview'
+import { BoundedMap } from '../util/boundedMap'
 
-const resolvedCache = new Map<string, string | null>()
+const RESOLVED_CACHE_MAX = 200
+
+const resolvedCache = new BoundedMap<string, string | null>(RESOLVED_CACHE_MAX)
 const inFlight = new Map<string, Promise<string | null>>()
 
-function extractPreviewFromEmbedHtml(html: string): string | null {
-  const match = html.match(
-    /<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/
-  )
-  if (!match?.[1]) return null
-
-  try {
-    const json = JSON.parse(match[1]) as {
-      props?: {
-        pageProps?: {
-          state?: {
-            data?: {
-              entity?: { audioPreview?: { url?: string } }
-            }
-          }
-        }
-      }
-    }
-    return json.props?.pageProps?.state?.data?.entity?.audioPreview?.url ?? null
-  } catch {
-    return null
-  }
-}
-
+/** Backend is authoritative; returns null only for a definitive 404. */
 async function fetchPreviewFromBackend(trackId: string): Promise<string | null> {
-  try {
-    const res = await fetch(`/api/preview/${encodeURIComponent(trackId)}`)
-    if (!res.ok) return null
-    const data = (await res.json()) as { preview_url?: string }
-    return data.preview_url ?? null
-  } catch {
-    return null
-  }
+  const res = await fetch(`/api/preview/${encodeURIComponent(trackId)}`)
+  if (res.status === 404) return null
+  if (!res.ok) throw new Error('Preview backend unavailable')
+  const data = (await res.json()) as { preview_url?: string }
+  return data.preview_url ?? null
 }
 
 async function fetchPreviewFromEmbed(trackId: string): Promise<string | null> {
@@ -62,22 +40,18 @@ async function resolvePreviewUrlParallel(trackId: string): Promise<string | null
     return persisted
   }
 
-  const cached = resolvedCache.get(trackId)
-  if (cached !== undefined) return cached
-
   const existing = inFlight.get(trackId)
   if (existing) return existing
 
   const promise = (async () => {
-    const [backend, embed] = await Promise.all([
-      fetchPreviewFromBackend(trackId),
-      fetchPreviewFromEmbed(trackId),
-    ])
-    const url = backend ?? embed ?? null
-    if (url) {
-      resolvedCache.set(trackId, url)
-      setCachedPreviewUrl(trackId, url)
+    let url: string | null
+    try {
+      url = await fetchPreviewFromBackend(trackId)
+    } catch {
+      url = await fetchPreviewFromEmbed(trackId)
     }
+    resolvedCache.set(trackId, url)
+    setCachedPreviewUrl(trackId, url)
     return url
   })().finally(() => {
     inFlight.delete(trackId)
@@ -87,7 +61,7 @@ async function resolvePreviewUrlParallel(trackId: string): Promise<string | null
   return promise
 }
 
-/** Resolve on hover — backend + embed in parallel; cached per track for the session. */
+/** Resolve on hover — backend first, embed fallback; cached per track (incl. misses). */
 export async function resolvePreviewUrl(
   trackId: string,
   apiPreviewUrl: string | null | undefined
