@@ -13,6 +13,7 @@ let audioEl: HTMLAudioElement | null = null
 let stopTimer: ReturnType<typeof setTimeout> | null = null
 let unlocked = false
 let lastError: string | null = null
+let currentSourceUrl: string | null = null
 
 let audioContext: AudioContext | null = null
 let gainNode: GainNode | null = null
@@ -80,6 +81,12 @@ function applyPlaybackLevel(linearGain: number): void {
   }
 }
 
+function applyCurrentGain(previewUrl: string): void {
+  const gain = playbackGainBySource.get(previewUrl) ?? PREVIEW_VOLUME
+  applyPlaybackLevel(gain)
+  if (audioEl) audioEl.volume = gain
+}
+
 function ensureAudio(): HTMLAudioElement {
   if (!audioEl) {
     audioEl = document.createElement('audio')
@@ -123,12 +130,10 @@ async function cachedPlaybackUrl(previewUrl: string): Promise<string> {
     const res = await fetch(previewUrl)
     if (!res.ok) throw new Error('Preview failed to load')
     const blob = await res.blob()
-    const [objectUrl, trackGain] = await Promise.all([
-      Promise.resolve(URL.createObjectURL(blob)),
-      measurePreviewGain(blob),
-    ])
+    const objectUrl = URL.createObjectURL(blob)
     audioBlobUrlBySource.set(previewUrl, objectUrl)
-    playbackGainBySource.set(previewUrl, PREVIEW_VOLUME * trackGain)
+    playbackGainBySource.set(previewUrl, PREVIEW_VOLUME)
+    void applyMeasuredGain(previewUrl, blob)
     return objectUrl
   })().finally(() => {
     audioFetchInFlight.delete(previewUrl)
@@ -138,11 +143,19 @@ async function cachedPlaybackUrl(previewUrl: string): Promise<string> {
   return promise
 }
 
+async function applyMeasuredGain(previewUrl: string, blob: Blob): Promise<void> {
+  const trackGain = await measurePreviewGain(blob, previewUrl)
+  const gain = PREVIEW_VOLUME * trackGain
+  playbackGainBySource.set(previewUrl, gain)
+  if (currentSourceUrl === previewUrl) applyCurrentGain(previewUrl)
+}
+
 export function stopPreview(): void {
   if (stopTimer) {
     clearTimeout(stopTimer)
     stopTimer = null
   }
+  currentSourceUrl = null
   if (audioEl) {
     audioEl.pause()
     audioEl.removeAttribute('src')
@@ -179,11 +192,9 @@ export async function playPreview(
     stopPreview()
     return false
   }
+  currentSourceUrl = previewUrl
   audio.src = playbackUrl
-  const playbackGain =
-    playbackGainBySource.get(previewUrl) ?? PREVIEW_VOLUME
-  applyPlaybackLevel(playbackGain)
-  audio.volume = playbackGain
+  applyCurrentGain(previewUrl)
 
   try {
     if (audio.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
@@ -219,7 +230,7 @@ export async function playPreview(
     }
 
     ensureAnalyser(audio)
-    applyPlaybackLevel(playbackGain)
+    applyCurrentGain(previewUrl)
     await audio.play()
     if (isCancelled()) {
       stopPreview()

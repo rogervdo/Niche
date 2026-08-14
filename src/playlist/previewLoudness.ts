@@ -18,20 +18,40 @@ function computeRms(buffer: AudioBuffer): number {
   return count > 0 ? Math.sqrt(sumSq / count) : 0
 }
 
-/** Per-track multiplier (1 = unchanged). Combine with master preview volume. */
-export async function measurePreviewGain(blob: Blob): Promise<number> {
+let decodeContext: AudioContext | null = null
+const gainCache = new Map<string, number>()
+
+function ensureDecodeContext(): AudioContext {
+  if (!decodeContext) decodeContext = new AudioContext()
+  return decodeContext
+}
+
+/**
+ * Per-track multiplier (1 = unchanged). Combine with master preview volume.
+ * `cacheKey` (the preview URL) memoizes the result so each track is decoded
+ * only once per session.
+ */
+export async function measurePreviewGain(
+  blob: Blob,
+  cacheKey?: string
+): Promise<number> {
+  if (cacheKey) {
+    const cached = gainCache.get(cacheKey)
+    if (cached !== undefined) return cached
+  }
   if (blob.size === 0) return 1
-  const ctx = new AudioContext()
+
   try {
     const arrayBuffer = await blob.arrayBuffer()
-    const buffer = await ctx.decodeAudioData(arrayBuffer.slice(0))
+    const buffer = await ensureDecodeContext().decodeAudioData(arrayBuffer)
     const rms = computeRms(buffer)
-    if (rms < 1e-5) return 1
-    const gain = TARGET_RMS / rms
-    return Math.min(MAX_GAIN, Math.max(MIN_GAIN, gain))
+    const gain =
+      rms < 1e-5
+        ? 1
+        : Math.min(MAX_GAIN, Math.max(MIN_GAIN, TARGET_RMS / rms))
+    if (cacheKey) gainCache.set(cacheKey, gain)
+    return gain
   } catch {
     return 1
-  } finally {
-    void ctx.close()
   }
 }
