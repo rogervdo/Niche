@@ -4223,3 +4223,61 @@ body.has-cart-bar-collapsed {
   color: var(--muted);
 }
 
+.analyze-liked-modal {
+  width: min(720px, 100%);
+}
+
+.analyze-liked-board {
+  margin-top: 0.5rem;
+}
+
+.analyze-liked-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 45vh;
+  overflow-y: auto;
+}
+
+.analyze-liked-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.analyze-liked-row:last-child {
+  border-bottom: none;
+}
+
+.analyze-liked-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.analyze-liked-name {
+  font-size: 0.95rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analyze-liked-artist {
+  font-size: 0.78rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analyze-liked-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+

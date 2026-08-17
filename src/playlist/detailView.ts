@@ -39,6 +39,7 @@ import { resolvePreviewUrl } from '../spotify/preview'
 import { runTrackReplaceFlow } from './trackReplace'
 import { runDuplicateDetectFlow } from './detectDuplicates'
 import { runPlaylistAnalyzeFlow } from './analyzePlaylist'
+import { runLikedSongsAnalysisFlow } from './analyzeLikedSongs'
 import { duplicateTrackIds } from '../spotify/trackDuplicates'
 import { addToCart, isInCart } from '../cart/cart'
 import {
@@ -64,6 +65,7 @@ import {
   iconRefresh,
   iconSearch,
   iconSwap,
+  iconTag,
 } from '../ui/icons'
 import { runFindInLibraryFlow } from './findInLibrary'
 import {
@@ -347,6 +349,7 @@ let replaceClickBound = false
 let addToPlaylistClickBound = false
 let duplicateClickBound = false
 let analyzeClickBound = false
+let analyzeLikedClickBound = false
 let selectionActionsBound = false
 let selectionEscapeBound = false
 let ownPlaylistTrackIndex: Map<string, PlaylistRef[]> | null = null
@@ -2435,6 +2438,37 @@ function bindAnalyzePlaylist(root: HTMLElement): void {
   })
 }
 
+function bindAnalyzeLikedSongs(root: HTMLElement): void {
+  if (analyzeLikedClickBound) return
+  analyzeLikedClickBound = true
+
+  root.addEventListener('click', (e) => {
+    const ctx = detailReplaceCtx
+    if (!ctx || ctx.kind !== 'liked') return
+
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(
+      '#analyze-liked-songs-btn'
+    )
+    if (!btn) return
+    e.preventDefault()
+
+    const load = detailViewOpts.loadOwnPlaylistTrackIndex
+    if (!load) {
+      showDetailNotice(root, 'Playlist analysis is unavailable.', true)
+      return
+    }
+
+    runLikedSongsAnalysisFlow({
+      entries: ctx.entries,
+      loadIndex: () =>
+        ownPlaylistTrackIndex ? Promise.resolve(ownPlaylistTrackIndex) : load(),
+      isPlaylistArchived: detailViewOpts.isPlaylistArchived,
+      onOpenPlaylist: detailViewOpts.onOpenPlaylist,
+      onError: (msg) => showDetailNotice(root, msg, true),
+    })
+  })
+}
+
 function bindDetectDuplicates(root: HTMLElement): void {
   if (duplicateClickBound) return
   duplicateClickBound = true
@@ -2859,6 +2893,19 @@ export function renderPlaylistDetail(
               aria-label="Analyze playlist"
               title="Analyze genres, niche rating, and top artists"
             >${iconChart(18)}</button>
+            ${
+              kind === 'liked'
+                ? `
+            <button
+              type="button"
+              class="btn-analyze-liked btn-icon pill-btn"
+              id="analyze-liked-songs-btn"
+              aria-label="Analyze liked songs"
+              title="See which of your playlists each liked song is in"
+            >${iconTag(18)}</button>
+            `
+                : ''
+            }
             ${tagTogglesHtml()}
             ${gridSizeControlsHtml()}
             ${groupMenuHtml(kind)}
@@ -2930,6 +2977,7 @@ export function renderPlaylistDetail(
   bindGridSizeControls(root, playlist, entries, kind, market, onBack, onTracksUpdated)
   bindDetectDuplicates(root)
   bindAnalyzePlaylist(root)
+  bindAnalyzeLikedSongs(root)
   bindTrackReplace(root)
   bindLikedHeart(root)
   bindAddToPlaylist(root)
