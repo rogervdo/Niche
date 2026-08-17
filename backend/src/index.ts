@@ -50,7 +50,7 @@ if (!isVercel) {
   async function main(): Promise<void> {
     await connectDb()
     startDailyPlaylistJob()
-    const host = process.env.HOST ?? '127.0.0.1'
+    const host = process.env.HOST ?? '0.0.0.0'
     app.listen(config.port, host, () => {
       console.log(`Niche API listening on http://${host}:${config.port}`)
     })
