@@ -1,5 +1,5 @@
 import { fetchPlaylistTracksFromCache } from '../api/playlistCache'
-import { spotifyFetch } from '../spotify/api'
+import { spotifyErrorMessage, spotifyFetch } from '../spotify/api'
 import { filterOwnPlaylists } from './ownPlaylists'
 import {
   getCachedPlaylistTrackIds,
@@ -187,30 +187,52 @@ async function fetchPlaylistTrackIds(
 }
 
 /** Map track ID → your own playlists (not collaborative or followed) that contain it. */
+export type TrackIndexBuildOptions = {
+  /** Skip the stored index and rebuild from Spotify. */
+  force?: boolean
+  onProgress?: (done: number, total: number) => void
+  onFailure?: (playlist: PlaylistRef, message: string) => void
+}
+
 export async function buildOwnPlaylistTrackIndex(
   playlists: SpotifyPlaylist[],
   userId: string,
   market: string,
-  archivedPlaylistIds: ReadonlySet<string> = new Set()
+  archivedPlaylistIds: ReadonlySet<string> = new Set(),
+  options: TrackIndexBuildOptions = {}
 ): Promise<Map<string, PlaylistRef[]>> {
   const own = filterOwnPlaylists(playlists, userId, archivedPlaylistIds)
 
   const fingerprint = tagIndexFingerprint(playlists, userId, archivedPlaylistIds)
-  const stored = loadStoredTagIndex(userId, market, fingerprint)
-  if (stored) return stored
+  if (!options.force) {
+    const stored = loadStoredTagIndex(userId, market, fingerprint)
+    if (stored) {
+      options.onProgress?.(own.length, own.length)
+      return stored
+    }
+  }
 
   const index = new Map<string, PlaylistRef[]>()
+  const total = own.length
+  let done = 0
 
   await mapWithConcurrency(own, FETCH_CONCURRENCY, async (playlist) => {
-    const trackIds = await fetchPlaylistTrackIds(playlist.id, market, userId)
     const ref: PlaylistRef = { id: playlist.id, name: playlist.name }
-    for (const trackId of trackIds) {
-      const existing = index.get(trackId)
-      if (existing) {
-        if (!existing.some((p) => p.id === ref.id)) existing.push(ref)
-      } else {
-        index.set(trackId, [ref])
+    try {
+      const trackIds = await fetchPlaylistTrackIds(playlist.id, market, userId)
+      for (const trackId of trackIds) {
+        const existing = index.get(trackId)
+        if (existing) {
+          if (!existing.some((p) => p.id === ref.id)) existing.push(ref)
+        } else {
+          index.set(trackId, [ref])
+        }
       }
+    } catch (err) {
+      options.onFailure?.(ref, spotifyErrorMessage(err))
+    } finally {
+      done += 1
+      options.onProgress?.(done, total)
     }
   })
 

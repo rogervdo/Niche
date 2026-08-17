@@ -83,22 +83,52 @@ export function spotifyErrorMessage(err: unknown): string {
   return String(err)
 }
 
+const MAX_RETRY_ATTEMPTS = 3
+const MAX_RETRY_DELAY_MS = 30_000
+
+function retryableStatus(status: number): boolean {
+  return status === 429 || status === 502 || status === 503 || status === 504
+}
+
+function retryDelayMs(attempt: number, headers: Headers): number {
+  const retryAfter = Number(headers.get('retry-after'))
+  if (Number.isFinite(retryAfter) && retryAfter > 0) {
+    return Math.min(retryAfter * 1000, MAX_RETRY_DELAY_MS)
+  }
+  return Math.min(1000 * 2 ** attempt, MAX_RETRY_DELAY_MS)
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 export async function spotifyFetch<T>(path: string): Promise<T> {
   const token = await getAccessToken()
   const url = path.startsWith('http') ? path : `${API_ROOT}${path}`
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
 
-  if (res.status === 401) {
-    throw new Error('Session expired. Connect again.')
-  }
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(parseSpotifyError(res.status, err))
-  }
+  let attempt = 0
+  for (;;) {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
 
-  return res.json() as Promise<T>
+    if (res.status === 401) {
+      throw new Error('Session expired. Connect again.')
+    }
+
+    if (!res.ok && retryableStatus(res.status) && attempt < MAX_RETRY_ATTEMPTS) {
+      await sleep(retryDelayMs(attempt, res.headers))
+      attempt += 1
+      continue
+    }
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(parseSpotifyError(res.status, err))
+    }
+
+    return res.json() as Promise<T>
+  }
 }
 
 export async function spotifyPut<T = { snapshot_id?: string }>(

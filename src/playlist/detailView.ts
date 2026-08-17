@@ -39,7 +39,6 @@ import { resolvePreviewUrl } from '../spotify/preview'
 import { runTrackReplaceFlow } from './trackReplace'
 import { runDuplicateDetectFlow } from './detectDuplicates'
 import { runPlaylistAnalyzeFlow } from './analyzePlaylist'
-import { runLikedSongsAnalysisFlow } from './analyzeLikedSongs'
 import { duplicateTrackIds } from '../spotify/trackDuplicates'
 import { addToCart, isInCart } from '../cart/cart'
 import {
@@ -87,6 +86,8 @@ export type PlaylistDetailOpts = {
   loadOwnPlaylistTrackIndex?: () => Promise<Map<string, PlaylistRef[]>>
   /** Hide playlist tags for archived library playlists. */
   isPlaylistArchived?: (playlistId: string) => boolean
+  /** Liked Songs: open the full-page playlist-membership analysis. */
+  onAnalyzeLikedSongs?: () => void
 }
 
 type DetailViewMode = 'list' | 'grid'
@@ -2452,20 +2453,12 @@ function bindAnalyzeLikedSongs(root: HTMLElement): void {
     if (!btn) return
     e.preventDefault()
 
-    const load = detailViewOpts.loadOwnPlaylistTrackIndex
-    if (!load) {
+    const open = detailViewOpts.onAnalyzeLikedSongs
+    if (!open) {
       showDetailNotice(root, 'Playlist analysis is unavailable.', true)
       return
     }
-
-    runLikedSongsAnalysisFlow({
-      entries: ctx.entries,
-      loadIndex: () =>
-        ownPlaylistTrackIndex ? Promise.resolve(ownPlaylistTrackIndex) : load(),
-      isPlaylistArchived: detailViewOpts.isPlaylistArchived,
-      onOpenPlaylist: detailViewOpts.onOpenPlaylist,
-      onError: (msg) => showDetailNotice(root, msg, true),
-    })
+    open()
   })
 }
 

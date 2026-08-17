@@ -11,7 +11,7 @@ export type ChatContextInput = {
   userId: string
   displayName: string
   market: string
-  view: 'dashboard' | 'discover' | 'detail' | 'top' | 'recent'
+  view: 'dashboard' | 'discover' | 'detail' | 'top' | 'recent' | 'analysis'
   playlists: SpotifyPlaylist[]
   activeDetailPlaylistId: string | null
   likedSongsTotal: number | null

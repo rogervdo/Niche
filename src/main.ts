@@ -50,6 +50,7 @@ import {
   buildOwnPlaylistTrackIndex,
   clearStoredTagIndex,
 } from './playlist/trackPlaylistIndex'
+import { renderLikedSongsAnalysisPage } from './playlist/analyzeLikedSongs'
 import {
   bindLibraryDashboard,
   bindManageGroupsModal,
@@ -72,7 +73,7 @@ import type { SpotifyPlaylist } from './spotify/types'
 const app = document.querySelector<HTMLDivElement>('#app')!
 
 type Filter = 'all' | PlaylistKind | 'archived'
-type AppView = 'dashboard' | 'discover' | 'detail' | 'top' | 'recent'
+type AppView = 'dashboard' | 'discover' | 'detail' | 'top' | 'recent' | 'analysis'
 
 type PlaylistSortMode =
   | 'library'
@@ -621,6 +622,7 @@ function playlistDetailOpts(): PlaylistDetailOpts {
     loadOwnPlaylistTrackIndex: () =>
       buildOwnPlaylistTrackIndex(playlists, userId, userMarket, archivedPlaylistIds()),
     isPlaylistArchived: (playlistId) => isArchived(libraryPrefs, playlistId),
+    onAnalyzeLikedSongs: () => openLikedAnalysis(),
   }
 }
 
@@ -713,6 +715,26 @@ async function openLikedSongs(): Promise<void> {
     renderDashboard()
     showError(e)
   }
+}
+
+function openLikedAnalysis(): void {
+  currentView = 'analysis'
+  activeDetailPlaylistId = null
+  renderLikedSongsAnalysisPage(app, {
+    userId,
+    market: userMarket,
+    playlists,
+    archivedPlaylistIds: archivedPlaylistIds(),
+    getLikedEntries: () => fetchPlaylistEntries(LIKED_SONGS_PLAYLIST_ID),
+    isPlaylistArchived: (playlistId) => isArchived(libraryPrefs, playlistId),
+    onOpenPlaylist: (playlistId) => {
+      currentView = 'detail'
+      void openPlaylist(playlistId)
+    },
+    onBack: () => {
+      void openLikedSongs()
+    },
+  })
 }
 
 async function openPlaylist(playlistId: string): Promise<void> {
