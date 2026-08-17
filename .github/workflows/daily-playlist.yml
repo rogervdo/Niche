@@ -1,0 +1,20 @@
+name: Daily playlist update
+
+on:
+  schedule:
+    - cron: '0 6 * * *' # 6:00 AM UTC daily
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger backend playlist update
+        run: |
+          curl --fail --silent --show-error \
+            --request POST "https://niche-uce5.onrender.com/api/admin/force" \
+            --header "Content-Type: application/json" \
+            --header "x-admin-secret: ${{ secrets.ADMIN_CLIENT_SECRET }}" \
+            --data '{}' \
+            --max-time 600
+
