@@ -2,6 +2,7 @@ import { Router } from 'express'
 import {
   deleteUserById,
   findUserById,
+  saveUser,
   toPublicUser,
   upsertUser,
 } from '../db/models/user.js'
@@ -90,7 +91,7 @@ usersRouter.post('/restore-options', async (req, res) => {
     }
 
     user.playlistOptions = mergeOptions()
-    await user.save()
+    await saveUser(user)
     res.json({ user: toPublicUser(user) })
   } catch (err) {
     const status = err instanceof SpotifyApiError ? err.status : 400
@@ -126,7 +127,7 @@ usersRouter.post('/options', async (req, res) => {
       ...user.playlistOptions,
       ...options,
     })
-    await user.save()
+    await saveUser(user)
     res.json({ user: toPublicUser(user) })
   } catch (err) {
     const status = err instanceof SpotifyApiError ? err.status : 400

@@ -1,9 +1,9 @@
 import {
   deleteUserById,
   findUserById,
-  getDecryptedRefreshToken,
+  listUsers,
+  saveUser,
   toPublicUser,
-  User,
   type UserDocument,
 } from '../db/models/user.js'
 import { DEFAULT_OPTIONS, mergeOptions, type PlaylistOptions } from '../discover/options.js'
@@ -42,7 +42,7 @@ export async function generateForUser(
   user: UserDocument,
   market = 'US'
 ): Promise<ReturnType<typeof generateDiscoverPlaylist>> {
-  const refreshToken = getDecryptedRefreshToken(user)
+  const refreshToken = user.refreshToken
   const { accessToken, refreshToken: newRefresh } =
     await refreshAccessToken(refreshToken)
 
@@ -63,7 +63,7 @@ export async function generateForUser(
 
   user.playlistId = result.playlistId
   user.lastUpdated = new Date()
-  await user.save()
+  await saveUser(user)
 
   return result
 }
@@ -84,7 +84,7 @@ export async function updateAllUsers(): Promise<{
   failed: number
   removed: number
 }> {
-  const users = await User.find()
+  const users = await listUsers()
   let updated = 0
   let failed = 0
   let removed = 0

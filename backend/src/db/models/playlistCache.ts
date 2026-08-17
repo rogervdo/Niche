@@ -1,132 +1,83 @@
-import mongoose, { Schema, type Document } from 'mongoose'
+import { getPool } from '../client.js'
 
 export const PLAYLIST_CACHE_TTL_MS = 24 * 60 * 60 * 1000
 
-export interface PlaylistLibraryCacheDoc extends Document {
-  userId: string
-  market: string
-  playlists: unknown[]
+export interface CacheEntry<T = unknown> {
+  payload: T
   fetchedAt: Date
 }
-
-export interface PlaylistTracksCacheDoc extends Document {
-  userId: string
-  playlistId: string
-  market: string
-  entries: unknown[]
-  fetchedAt: Date
-}
-
-export interface TrackMetaCacheDoc extends Document {
-  userId: string
-  trackId: string
-  track: unknown
-  fetchedAt: Date
-}
-
-export interface AudioFeaturesCacheDoc extends Document {
-  userId: string
-  trackId: string
-  tempo: number
-  valence: number
-  danceability: number
-  acousticness: number
-  fetchedAt: Date
-}
-
-export interface LikedTracksCacheDoc extends Document {
-  userId: string
-  trackIds: string[]
-  fetchedAt: Date
-}
-
-const playlistLibraryCacheSchema = new Schema<PlaylistLibraryCacheDoc>(
-  {
-    userId: { type: String, required: true, unique: true, index: true },
-    market: { type: String, required: true, default: 'US' },
-    playlists: { type: [Schema.Types.Mixed], default: [] },
-    fetchedAt: { type: Date, required: true },
-  },
-  { timestamps: true }
-)
-
-const playlistTracksCacheSchema = new Schema<PlaylistTracksCacheDoc>(
-  {
-    userId: { type: String, required: true, index: true },
-    playlistId: { type: String, required: true, index: true },
-    market: { type: String, required: true, default: 'US' },
-    entries: { type: [Schema.Types.Mixed], default: [] },
-    fetchedAt: { type: Date, required: true },
-  },
-  { timestamps: true }
-)
-
-playlistTracksCacheSchema.index(
-  { userId: 1, playlistId: 1, market: 1 },
-  { unique: true }
-)
-
-export const PlaylistLibraryCache = mongoose.model<PlaylistLibraryCacheDoc>(
-  'PlaylistLibraryCache',
-  playlistLibraryCacheSchema
-)
-
-export const PlaylistTracksCache = mongoose.model<PlaylistTracksCacheDoc>(
-  'PlaylistTracksCache',
-  playlistTracksCacheSchema
-)
-
-const trackMetaCacheSchema = new Schema<TrackMetaCacheDoc>(
-  {
-    userId: { type: String, required: true, index: true },
-    trackId: { type: String, required: true, index: true },
-    track: { type: Schema.Types.Mixed, required: true },
-    fetchedAt: { type: Date, required: true },
-  },
-  { timestamps: true }
-)
-
-trackMetaCacheSchema.index({ userId: 1, trackId: 1 }, { unique: true })
-
-const audioFeaturesCacheSchema = new Schema<AudioFeaturesCacheDoc>(
-  {
-    userId: { type: String, required: true, index: true },
-    trackId: { type: String, required: true, index: true },
-    tempo: { type: Number, required: true },
-    valence: { type: Number, required: true },
-    danceability: { type: Number, required: true },
-    acousticness: { type: Number, required: true },
-    fetchedAt: { type: Date, required: true },
-  },
-  { timestamps: true }
-)
-
-audioFeaturesCacheSchema.index({ userId: 1, trackId: 1 }, { unique: true })
-
-export const TrackMetaCache = mongoose.model<TrackMetaCacheDoc>(
-  'TrackMetaCache',
-  trackMetaCacheSchema
-)
-
-export const AudioFeaturesCache = mongoose.model<AudioFeaturesCacheDoc>(
-  'AudioFeaturesCache',
-  audioFeaturesCacheSchema
-)
-
-const likedTracksCacheSchema = new Schema<LikedTracksCacheDoc>(
-  {
-    userId: { type: String, required: true, unique: true, index: true },
-    trackIds: { type: [String], default: [] },
-    fetchedAt: { type: Date, required: true },
-  },
-  { timestamps: true }
-)
-
-export const LikedTracksCache = mongoose.model<LikedTracksCacheDoc>(
-  'LikedTracksCache',
-  likedTracksCacheSchema
-)
 
 export function isCacheFresh(fetchedAt: Date): boolean {
   return Date.now() - fetchedAt.getTime() < PLAYLIST_CACHE_TTL_MS
+}
+
+export async function cacheGet<T>(
+  userId: string,
+  kind: string,
+  key: string
+): Promise<CacheEntry<T> | null> {
+  const { rows } = await getPool().query<{ payload: T; fetched_at: Date }>(
+    'SELECT payload, fetched_at FROM cache WHERE user_id = $1 AND kind = $2 AND key = $3',
+    [userId, kind, key]
+  )
+  return rows[0] ? { payload: rows[0].payload, fetchedAt: rows[0].fetched_at } : null
+}
+
+export async function cacheGetMany<T>(
+  userId: string,
+  kind: string,
+  keys: string[]
+): Promise<Map<string, CacheEntry<T>>> {
+  const map = new Map<string, CacheEntry<T>>()
+  if (!keys.length) return map
+
+  const { rows } = await getPool().query<{
+    key: string
+    payload: T
+    fetched_at: Date
+  }>(
+    'SELECT key, payload, fetched_at FROM cache WHERE user_id = $1 AND kind = $2 AND key = ANY($3)',
+    [userId, kind, keys]
+  )
+  for (const row of rows) {
+    map.set(row.key, { payload: row.payload, fetchedAt: row.fetched_at })
+  }
+  return map
+}
+
+export async function cachePut(
+  userId: string,
+  kind: string,
+  key: string,
+  payload: unknown
+): Promise<void> {
+  await getPool().query(
+    `INSERT INTO cache (user_id, kind, key, payload, fetched_at)
+     VALUES ($1, $2, $3, $4, now())
+     ON CONFLICT (user_id, kind, key)
+     DO UPDATE SET payload = EXCLUDED.payload, fetched_at = EXCLUDED.fetched_at, updated_at = now()`,
+    [userId, kind, key, JSON.stringify(payload)]
+  )
+}
+
+export async function cacheDelete(
+  userId: string,
+  kind: string,
+  key?: string
+): Promise<void> {
+  if (key !== undefined) {
+    await getPool().query(
+      'DELETE FROM cache WHERE user_id = $1 AND kind = $2 AND key = $3',
+      [userId, kind, key]
+    )
+  } else {
+    await getPool().query('DELETE FROM cache WHERE user_id = $1 AND kind = $2', [
+      userId,
+      kind,
+    ])
+  }
+}
+
+export async function cacheDeleteAll(userId: string): Promise<void> {
+  await getPool().query('DELETE FROM cache WHERE user_id = $1', [userId])
 }

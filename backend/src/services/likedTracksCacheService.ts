@@ -1,7 +1,15 @@
-import { isCacheFresh, LikedTracksCache } from '../db/models/playlistCache.js'
+import {
+  cacheDelete,
+  cacheGet,
+  cachePut,
+  isCacheFresh,
+} from '../db/models/playlistCache.js'
 import { spotifyFetch } from './spotify.js'
 
 const SAVED_TRACKS_FIELDS = 'items(track(id)),next'
+
+const KIND_LIKED = 'liked_tracks'
+const KEY = ''
 
 type SavedTracksPage = {
   items: { track: { id: string } | null }[]
@@ -35,12 +43,12 @@ export async function getCachedLikedTrackIds(
   force = false
 ): Promise<{ trackIds: string[]; cached: boolean; fetchedAt: string }> {
   if (!force) {
-    const doc = await LikedTracksCache.findOne({ userId })
-    if (doc && isCacheFresh(doc.fetchedAt)) {
+    const entry = await cacheGet<string[]>(userId, KIND_LIKED, KEY)
+    if (entry && isCacheFresh(entry.fetchedAt)) {
       return {
-        trackIds: doc.trackIds,
+        trackIds: entry.payload,
         cached: true,
-        fetchedAt: doc.fetchedAt.toISOString(),
+        fetchedAt: entry.fetchedAt.toISOString(),
       }
     }
   }
@@ -48,11 +56,7 @@ export async function getCachedLikedTrackIds(
   const trackIds = await fetchLikedTrackIdsFromSpotify(accessToken)
   const fetchedAt = new Date()
 
-  await LikedTracksCache.findOneAndUpdate(
-    { userId },
-    { userId, trackIds, fetchedAt },
-    { upsert: true, new: true }
-  )
+  await cachePut(userId, KIND_LIKED, KEY, trackIds)
 
   return {
     trackIds,
@@ -66,13 +70,11 @@ export async function addTracksToLikedCache(
   trackIds: string[]
 ): Promise<void> {
   if (!trackIds.length) return
-  const doc = await LikedTracksCache.findOne({ userId })
-  if (!doc) return
-  const set = new Set(doc.trackIds)
+  const entry = await cacheGet<string[]>(userId, KIND_LIKED, KEY)
+  if (!entry) return
+  const set = new Set(entry.payload)
   for (const id of trackIds) set.add(id)
-  doc.trackIds = [...set]
-  doc.fetchedAt = new Date()
-  await doc.save()
+  await cachePut(userId, KIND_LIKED, KEY, [...set])
 }
 
 export async function removeTracksFromLikedCache(
@@ -80,14 +82,17 @@ export async function removeTracksFromLikedCache(
   trackIds: string[]
 ): Promise<void> {
   if (!trackIds.length) return
-  const doc = await LikedTracksCache.findOne({ userId })
-  if (!doc) return
+  const entry = await cacheGet<string[]>(userId, KIND_LIKED, KEY)
+  if (!entry) return
   const remove = new Set(trackIds)
-  doc.trackIds = doc.trackIds.filter((id) => !remove.has(id))
-  doc.fetchedAt = new Date()
-  await doc.save()
+  await cachePut(
+    userId,
+    KIND_LIKED,
+    KEY,
+    entry.payload.filter((id) => !remove.has(id))
+  )
 }
 
 export async function clearUserLikedTracksCache(userId: string): Promise<void> {
-  await LikedTracksCache.deleteOne({ userId })
+  await cacheDelete(userId, KIND_LIKED)
 }

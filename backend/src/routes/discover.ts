@@ -36,10 +36,11 @@ export const adminRouter = Router()
 
 adminRouter.post('/force', async (req, res) => {
   const { clientSecret } = req.body as { clientSecret?: string }
+  const provided = clientSecret ?? req.get('x-admin-secret')
 
   if (
     !config.adminClientSecret ||
-    clientSecret !== config.adminClientSecret
+    provided !== config.adminClientSecret
   ) {
     res.status(403).json({ error: 'Forbidden' })
     return

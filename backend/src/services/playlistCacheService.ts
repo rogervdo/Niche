@@ -1,7 +1,8 @@
 import {
+  cacheDelete,
+  cacheGet,
+  cachePut,
   isCacheFresh,
-  PlaylistLibraryCache,
-  PlaylistTracksCache,
 } from '../db/models/playlistCache.js'
 import {
   fetchAllPlaylists,
@@ -16,6 +17,13 @@ import {
 } from './trackMetaCacheService.js'
 import { validateUser } from './spotify.js'
 
+const KIND_LIBRARY = 'playlist_library'
+const KIND_TRACKS = 'playlist_tracks'
+
+function tracksKey(market: string, playlistId: string): string {
+  return `${market}:${playlistId}`
+}
+
 export async function getCachedPlaylists(
   userId: string,
   accessToken: string,
@@ -25,12 +33,12 @@ export async function getCachedPlaylists(
   await validateUser(userId, accessToken)
 
   if (!force) {
-    const doc = await PlaylistLibraryCache.findOne({ userId })
-    if (doc && doc.market === market && isCacheFresh(doc.fetchedAt)) {
+    const entry = await cacheGet<SpotifyPlaylist[]>(userId, KIND_LIBRARY, market)
+    if (entry && isCacheFresh(entry.fetchedAt)) {
       return {
-        playlists: doc.playlists as SpotifyPlaylist[],
+        playlists: entry.payload,
         cached: true,
-        fetchedAt: doc.fetchedAt.toISOString(),
+        fetchedAt: entry.fetchedAt.toISOString(),
       }
     }
   }
@@ -38,11 +46,7 @@ export async function getCachedPlaylists(
   const playlists = await fetchAllPlaylists(accessToken)
   const fetchedAt = new Date()
 
-  await PlaylistLibraryCache.findOneAndUpdate(
-    { userId },
-    { userId, market, playlists, fetchedAt },
-    { upsert: true, new: true }
-  )
+  await cachePut(userId, KIND_LIBRARY, market, playlists)
 
   return {
     playlists,
@@ -64,19 +68,21 @@ export async function getCachedPlaylistTracks(
 }> {
   await validateUser(userId, accessToken)
 
+  const key = tracksKey(market, playlistId)
+
   if (!force) {
-    const doc = await PlaylistTracksCache.findOne({ userId, playlistId, market })
-    if (doc && isCacheFresh(doc.fetchedAt)) {
+    const entry = await cacheGet<PlaylistTrackEntry[]>(userId, KIND_TRACKS, key)
+    if (entry && isCacheFresh(entry.fetchedAt)) {
       const entries = await enrichPlaylistEntries(
         userId,
         accessToken,
         market,
-        doc.entries as PlaylistTrackEntry[]
+        entry.payload
       )
       return {
         entries,
         cached: true,
-        fetchedAt: doc.fetchedAt.toISOString(),
+        fetchedAt: entry.fetchedAt.toISOString(),
       }
     }
   }
@@ -85,11 +91,7 @@ export async function getCachedPlaylistTracks(
   const entries = await enrichPlaylistEntries(userId, accessToken, market, raw)
   const fetchedAt = new Date()
 
-  await PlaylistTracksCache.findOneAndUpdate(
-    { userId, playlistId, market },
-    { userId, playlistId, market, entries, fetchedAt },
-    { upsert: true, new: true }
-  )
+  await cachePut(userId, KIND_TRACKS, key, entries)
 
   return {
     entries,
@@ -105,11 +107,7 @@ export async function savePlaylistsToCache(
   playlists: SpotifyPlaylist[]
 ): Promise<void> {
   await validateUser(userId, accessToken)
-  await PlaylistLibraryCache.findOneAndUpdate(
-    { userId },
-    { userId, market, playlists, fetchedAt: new Date() },
-    { upsert: true, new: true }
-  )
+  await cachePut(userId, KIND_LIBRARY, market, playlists)
 }
 
 export async function savePlaylistTracksToCache(
@@ -126,11 +124,7 @@ export async function savePlaylistTracksToCache(
     market,
     entries
   )
-  await PlaylistTracksCache.findOneAndUpdate(
-    { userId, playlistId, market },
-    { userId, playlistId, market, entries: enriched, fetchedAt: new Date() },
-    { upsert: true, new: true }
-  )
+  await cachePut(userId, KIND_TRACKS, tracksKey(market, playlistId), enriched)
 }
 
 export async function clearUserPlaylistCache(
@@ -139,8 +133,8 @@ export async function clearUserPlaylistCache(
 ): Promise<void> {
   await validateUser(userId, accessToken)
   await Promise.all([
-    PlaylistLibraryCache.deleteOne({ userId }),
-    PlaylistTracksCache.deleteMany({ userId }),
+    cacheDelete(userId, KIND_LIBRARY),
+    cacheDelete(userId, KIND_TRACKS),
     clearUserTrackMetaCache(userId),
     clearUserLikedTracksCache(userId),
   ])
@@ -153,5 +147,5 @@ export async function invalidatePlaylistTracks(
   market: string
 ): Promise<void> {
   await validateUser(userId, accessToken)
-  await PlaylistTracksCache.deleteOne({ userId, playlistId, market })
+  await cacheDelete(userId, KIND_TRACKS, tracksKey(market, playlistId))
 }

@@ -13,7 +13,7 @@ function connectOnce(): Promise<void> {
   return dbReady
 }
 
-/** Connect MongoDB on first use (skipped for /health and /preview). */
+/** Connect the database on first use (skipped for /health and /preview). */
 export async function ensureDb(
   _req: Request,
   res: Response,

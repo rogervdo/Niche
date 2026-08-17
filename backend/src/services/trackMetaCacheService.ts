@@ -1,10 +1,14 @@
 import {
-  AudioFeaturesCache,
+  cacheDelete,
+  cacheGetMany,
+  cachePut,
   isCacheFresh,
-  TrackMetaCache,
 } from '../db/models/playlistCache.js'
 import type { PlaylistTrackEntry, SpotifyTrack } from './playlistLibrary.js'
 import { spotifyFetch } from './spotify.js'
+
+const KIND_TRACK_META = 'track_meta'
+const KIND_AUDIO = 'audio_features'
 
 export type AudioFeatures = {
   id: string
@@ -13,6 +17,8 @@ export type AudioFeatures = {
   danceability: number
   acousticness: number
 }
+
+type AudioFeaturesPayload = Omit<AudioFeatures, 'id'>
 
 type TracksByIdsResponse = {
   tracks: (SpotifyTrack | null)[]
@@ -68,14 +74,15 @@ async function loadCachedTracks(
   userId: string,
   trackIds: string[]
 ): Promise<Map<string, SpotifyTrack>> {
-  const docs = await TrackMetaCache.find({
+  const entries = await cacheGetMany<SpotifyTrack>(
     userId,
-    trackId: { $in: trackIds },
-  })
+    KIND_TRACK_META,
+    trackIds
+  )
   const map = new Map<string, SpotifyTrack>()
-  for (const doc of docs) {
-    if (isCacheFresh(doc.fetchedAt)) {
-      map.set(doc.trackId, doc.track as SpotifyTrack)
+  for (const [trackId, entry] of entries) {
+    if (isCacheFresh(entry.fetchedAt)) {
+      map.set(trackId, entry.payload)
     }
   }
   return map
@@ -85,15 +92,8 @@ async function saveCachedTracks(
   userId: string,
   tracks: SpotifyTrack[]
 ): Promise<void> {
-  const fetchedAt = new Date()
   await Promise.all(
-    tracks.map((track) =>
-      TrackMetaCache.findOneAndUpdate(
-        { userId, trackId: track.id },
-        { userId, trackId: track.id, track, fetchedAt },
-        { upsert: true }
-      )
-    )
+    tracks.map((track) => cachePut(userId, KIND_TRACK_META, track.id, track))
   )
 }
 
@@ -140,22 +140,17 @@ export async function getCachedAudioFeatures(
   const unique = [...new Set(trackIds.filter(Boolean))]
   const out: Record<string, AudioFeatures> = {}
 
-  const docs = await AudioFeaturesCache.find({
+  const entries = await cacheGetMany<AudioFeaturesPayload>(
     userId,
-    trackId: { $in: unique },
-  })
+    KIND_AUDIO,
+    unique
+  )
   const missing: string[] = []
 
   for (const id of unique) {
-    const doc = docs.find((d) => d.trackId === id)
-    if (doc && isCacheFresh(doc.fetchedAt)) {
-      out[id] = {
-        id,
-        tempo: doc.tempo,
-        valence: doc.valence,
-        danceability: doc.danceability,
-        acousticness: doc.acousticness,
-      }
+    const entry = entries.get(id)
+    if (entry && isCacheFresh(entry.fetchedAt)) {
+      out[id] = { id, ...entry.payload }
     } else {
       missing.push(id)
     }
@@ -168,23 +163,15 @@ export async function getCachedAudioFeatures(
       `/audio-features?ids=${ids}`,
       accessToken
     )
-    const fetchedAt = new Date()
     for (const feat of res.audio_features ?? []) {
       if (!feat?.id) continue
       out[feat.id] = feat
-      await AudioFeaturesCache.findOneAndUpdate(
-        { userId, trackId: feat.id },
-        {
-          userId,
-          trackId: feat.id,
-          tempo: feat.tempo,
-          valence: feat.valence,
-          danceability: feat.danceability,
-          acousticness: feat.acousticness,
-          fetchedAt,
-        },
-        { upsert: true }
-      )
+      await cachePut(userId, KIND_AUDIO, feat.id, {
+        tempo: feat.tempo,
+        valence: feat.valence,
+        danceability: feat.danceability,
+        acousticness: feat.acousticness,
+      })
     }
   }
 
@@ -193,7 +180,7 @@ export async function getCachedAudioFeatures(
 
 export async function clearUserTrackMetaCache(userId: string): Promise<void> {
   await Promise.all([
-    TrackMetaCache.deleteMany({ userId }),
-    AudioFeaturesCache.deleteMany({ userId }),
+    cacheDelete(userId, KIND_TRACK_META),
+    cacheDelete(userId, KIND_AUDIO),
   ])
 }
