@@ -34,6 +34,8 @@ import type {
   ArtistTopTracksResponse,
   ArtistAlbumsPage,
   PlaylistTrackEntry,
+  SavedAlbumItem,
+  SavedAlbumsPage,
   SavedTracksPage,
   SpotifyPlaylist,
   SpotifyTrack,
@@ -602,7 +604,12 @@ export async function enrichPlaylistEntries(
 
 export const LIKED_SONGS_PLAYLIST_ID = '__niche_liked_songs__'
 
-export type PlaylistKind = 'yours' | 'collaborative' | 'followed' | 'liked'
+export type PlaylistKind =
+  | 'yours'
+  | 'collaborative'
+  | 'followed'
+  | 'liked'
+  | 'album'
 
 /** Synthetic playlist object for the Liked Songs library view. */
 export function buildLikedSongsPlaylist(
@@ -719,6 +726,32 @@ export async function getLikedSongEntries(market?: string): Promise<PlaylistTrac
   }
 
   return entries
+}
+
+/** All saved albums (Spotify's Albums library), newest first. */
+export async function getSavedAlbumsDeep(
+  market?: string,
+  onProgress?: (loaded: number, total: number) => void
+): Promise<SavedAlbumItem[]> {
+  const albums: SavedAlbumItem[] = []
+  const marketParam = market ? `&market=${encodeURIComponent(market)}` : ''
+  let url: string | null = `/me/albums?limit=50${marketParam}`
+
+  while (url) {
+    const path = url.startsWith('http')
+      ? url.replace('https://api.spotify.com/v1', '')
+      : url
+    const page: SavedAlbumsPage = await spotifyFetch<SavedAlbumsPage>(path)
+    for (const item of page.items ?? []) {
+      if (item?.album?.id) {
+        albums.push({ added_at: item.added_at, album: item.album })
+      }
+    }
+    onProgress?.(albums.length, page.total)
+    url = page.next ? page.next.replace('https://api.spotify.com/v1', '') : null
+  }
+
+  return albums
 }
 
 export function classifyPlaylist(

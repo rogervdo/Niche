@@ -11,7 +11,14 @@ export type ChatContextInput = {
   userId: string
   displayName: string
   market: string
-  view: 'dashboard' | 'discover' | 'detail' | 'top' | 'recent' | 'analysis'
+  view:
+    | 'dashboard'
+    | 'discover'
+    | 'detail'
+    | 'top'
+    | 'recent'
+    | 'analysis'
+    | 'albums'
   playlists: SpotifyPlaylist[]
   activeDetailPlaylistId: string | null
   likedSongsTotal: number | null

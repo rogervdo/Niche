@@ -35,12 +35,19 @@ import {
   setCachedEntries,
   upsertCachedPlaylist,
 } from './spotify/playlistCache'
-import type { PlaylistTrackEntry } from './spotify/types'
+import type { PlaylistTrackEntry, SpotifyAlbumFull } from './spotify/types'
 import { mountCartUI, unmountCartUI } from './cart/ui'
 import { mountChatUI, unmountChatUI } from './chat/widget'
 import { renderDiscoverView } from './discover/view'
 import { renderRecentView } from './listening/recentView'
 import { disposeTopView, renderTopView } from './listening/topView'
+import { disposeAlbumsView, renderAlbumsView } from './albums/albumsView'
+import {
+  buildAlbumPlaylist,
+  fetchAlbumEntries,
+  getAlbumEntries,
+} from './albums/albumDetail'
+import { getCachedSavedAlbums } from './albums/albumsCache'
 import {
   renderPlaylistDetail,
   type PlaylistDetailOpts,
@@ -73,7 +80,14 @@ import type { SpotifyPlaylist } from './spotify/types'
 const app = document.querySelector<HTMLDivElement>('#app')!
 
 type Filter = 'all' | PlaylistKind | 'archived'
-type AppView = 'dashboard' | 'discover' | 'detail' | 'top' | 'recent' | 'analysis'
+type AppView =
+  | 'dashboard'
+  | 'discover'
+  | 'detail'
+  | 'top'
+  | 'recent'
+  | 'analysis'
+  | 'albums'
 
 type PlaylistSortMode =
   | 'library'
@@ -210,6 +224,8 @@ function formatKind(kind: PlaylistKind): string {
       return 'Followed'
     case 'liked':
       return 'Liked Songs'
+    case 'album':
+      return 'Album'
   }
 }
 
@@ -321,6 +337,7 @@ function sortPlaylists(items: SpotifyPlaylist[]): SpotifyPlaylist[] {
     collaborative: 1,
     followed: 2,
     liked: 3,
+    album: 4,
   }
   const publicRank = (p: SpotifyPlaylist) =>
     p.public === true ? 0 : p.public === false ? 1 : 2
@@ -540,6 +557,64 @@ function openRecent(): void {
       void loginWithSpotify()
     }
   )
+}
+
+function openAlbums(): void {
+  currentView = 'albums'
+  activeDetailPlaylistId = null
+  renderAlbumsView(app, {
+    market: userMarket,
+    onBack: () => {
+      currentView = 'dashboard'
+      activeDetailPlaylistId = null
+      renderDashboard()
+    },
+    onOpenAlbum: (albumId) => {
+      void openAlbum(albumId)
+    },
+  })
+}
+
+async function resolveAlbum(albumId: string): Promise<SpotifyAlbumFull> {
+  const cached = getCachedSavedAlbums()?.find((a) => a.album.id === albumId)
+  if (cached) return cached.album
+  return spotifyFetch<SpotifyAlbumFull>(`/albums/${albumId}`)
+}
+
+async function refreshAlbumDetail(
+  albumId: string
+): Promise<PlaylistDetailRefreshResult> {
+  const entries = await fetchAlbumEntries(albumId, userMarket)
+  return { entries }
+}
+
+async function openAlbum(albumId: string): Promise<void> {
+  disposeAlbumsView()
+  currentView = 'albums'
+  activeDetailPlaylistId = null
+  showLoading('Loading album…')
+
+  try {
+    const album = await resolveAlbum(albumId)
+    const entries = await getAlbumEntries(albumId, userMarket)
+
+    renderPlaylistDetail(
+      app,
+      buildAlbumPlaylist(album),
+      entries,
+      'album',
+      userMarket,
+      () => openAlbums(),
+      undefined,
+      {
+        ...playlistDetailOpts(),
+        onRefresh: () => refreshAlbumDetail(album.id),
+      }
+    )
+  } catch (err) {
+    openAlbums()
+    showError(err)
+  }
 }
 
 async function fetchPlaylistEntries(
@@ -963,6 +1038,7 @@ function renderDashboard(): void {
 
       <div class="nav-tabs">
         <button type="button" class="nav-tab active" disabled>Playlists</button>
+        <button type="button" class="nav-tab" id="albums-tab">Albums</button>
         <button type="button" class="nav-tab" id="top-tab">Top</button>
         <button type="button" class="nav-tab" id="recent-tab">Recently played</button>
         <button type="button" class="nav-tab" id="discover-tab">Discover Daily</button>
@@ -1029,6 +1105,10 @@ function renderDashboard(): void {
 
   document.getElementById('top-tab')!.addEventListener('click', () => {
     openTop()
+  })
+
+  document.getElementById('albums-tab')!.addEventListener('click', () => {
+    openAlbums()
   })
 
   document.getElementById('recent-tab')!.addEventListener('click', () => {

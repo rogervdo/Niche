@@ -1143,6 +1143,8 @@ function formatKind(kind: PlaylistKind): string {
       return 'Followed'
     case 'liked':
       return 'Liked Songs'
+    case 'album':
+      return 'Album'
   }
 }
 
@@ -2734,7 +2736,7 @@ export function renderPlaylistDetail(
     localStorage.setItem(SORT_STORAGE_KEY, sortMode)
   }
 
-  const canEdit = kind !== 'followed' && kind !== 'liked'
+  const canEdit = kind !== 'followed' && kind !== 'liked' && kind !== 'album'
   detailReplaceCtx = {
     playlist,
     entries,
@@ -2777,7 +2779,7 @@ export function renderPlaylistDetail(
 
   root.innerHTML = `
     <div class="shell detail-shell ${viewMode === 'grid' ? 'detail-shell-grid' : ''}">
-      <button type="button" class="btn-back" id="back-btn">← Back to playlists</button>
+      <button type="button" class="btn-back" id="back-btn">← Back to ${kind === 'album' ? 'albums' : 'playlists'}</button>
 
       <header class="detail-header">
         <div class="detail-cover">

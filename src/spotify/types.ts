@@ -140,6 +140,29 @@ export interface SavedTracksPage {
   next: string | null
 }
 
+export interface SpotifyAlbumFull {
+  id: string
+  name: string
+  album_type: 'album' | 'single' | 'compilation'
+  artists: SpotifyArtist[]
+  images: { url: string; width?: number | null; height?: number | null }[] | null
+  release_date: string
+  release_date_precision: 'year' | 'month' | 'day'
+  total_tracks: number
+  external_urls: { spotify: string }
+}
+
+export interface SavedAlbumItem {
+  added_at: string
+  album: SpotifyAlbumFull
+}
+
+export interface SavedAlbumsPage {
+  items: (SavedAlbumItem | null)[] | null
+  total: number
+  next: string | null
+}
+
 export interface TokenResponse {
   access_token: string
   token_type: string

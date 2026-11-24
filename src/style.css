@@ -680,6 +680,35 @@ code {
   color: #f58ad4;
 }
 
+.badge-album {
+  background: #1b3245;
+  color: #7cc4f5;
+}
+
+.albums-sub {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  text-align: center;
+  font-size: 0.9rem;
+}
+
+.albums-error {
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  background: #3d2020;
+  color: var(--error);
+  border: 1px solid #5c2020;
+}
+
+.albums-retry-wrap {
+  text-align: center;
+}
+
+.album-card-sub {
+  margin-top: 0.15rem;
+}
+
 .card-liked .card-art {
   background: linear-gradient(135deg, #450a2a 0%, #1a3d28 55%, #0f172a 100%);
 }

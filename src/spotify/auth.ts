@@ -1,4 +1,5 @@
 import { clearListeningCache } from '../listening/cache'
+import { clearSavedAlbumsCache } from '../albums/albumsCache'
 import type { TokenResponse } from './types'
 
 const CLIENT_ID = import.meta.env.VITE_SPOTIFY_CLIENT_ID as string
@@ -84,6 +85,7 @@ export function clearAuth(): void {
   sessionStorage.removeItem(VERIFIER_KEY)
   localStorage.removeItem(SCOPES_VERSION_KEY)
   clearListeningCache()
+  clearSavedAlbumsCache()
 }
 
 /** True when the saved token predates the current scope list. */
