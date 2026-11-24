@@ -43,12 +43,45 @@ function readCart(): CartEntry[] {
   }
 }
 
-function writeCart(tracks: CartEntry[]): void {
+/**
+ * Rebuildable caches that share localStorage with the cart, largest first.
+ * Evicted only when a cart write hits the storage quota.
+ */
+const EVICTABLE_CACHE_KEYS = [
+  'niche_track_details_v1',
+  'niche_audio_features_v1',
+  'niche_preview_urls_v1',
+  'niche_saved_albums_v1',
+  'niche_playlist_tag_index_v2',
+  'niche_playlist_track_ids_v1',
+  'niche_liked_tracks_v1',
+  'niche_tracks_cache_local_v1',
+  'niche_cart_v1',
+]
+
+/** Persist the cart, evicting rebuildable caches if the quota is full. */
+function writeCart(tracks: CartEntry[]): boolean {
+  const payload = JSON.stringify(tracks)
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(tracks))
-  } catch (err) {
-    console.warn('[cart] localStorage write failed', err)
+    localStorage.setItem(STORAGE_KEY, payload)
+    return true
+  } catch {
+    /* quota exceeded — free space below and retry */
   }
+
+  for (const key of EVICTABLE_CACHE_KEYS) {
+    try {
+      if (localStorage.getItem(key) === null) continue
+      localStorage.removeItem(key)
+      localStorage.setItem(STORAGE_KEY, payload)
+      return true
+    } catch {
+      continue
+    }
+  }
+
+  console.warn('[cart] localStorage is full; cart write was not persisted')
+  return false
 }
 
 function notify(): void {
@@ -75,7 +108,7 @@ export function isInCart(trackId: string): boolean {
 export function addToCart(track: SpotifyTrack): boolean {
   const tracks = readCart()
   if (tracks.some((t) => t.id === track.id)) return false
-  writeCart([...tracks, toCartEntry(track)])
+  if (!writeCart([...tracks, toCartEntry(track)])) return false
   notify()
   return true
 }
